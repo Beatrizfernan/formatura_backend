@@ -6,7 +6,7 @@
             "name": "Python Debugger: run.py",
             "type": "debugpy",
             "request": "launch",
-            "program": "/Users/beatrizfernandes/Documents/formatura_system/run.py",
+            "program": "/Users/beatrizfernandes/Documents/formatura_system/app/services/__init__.py",
             "cwd": "/Users/beatrizfernandes/Documents/formatura_system",
             "console": "integratedTerminal",
             "justMyCode": true
