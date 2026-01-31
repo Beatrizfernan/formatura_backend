@@ -4,6 +4,7 @@ from config import MONGO_URI
 from app.routes.local_routes import local_bp
 from app.routes.formatura_routes import formatura_bp
 from app.routes.planilha_routes import planilha_bp
+from app.routes.pdf_routes import pdf_bp
 from flask_cors import CORS
 
 def create_app():
@@ -15,6 +16,7 @@ def create_app():
     app.register_blueprint(local_bp)
     app.register_blueprint(formatura_bp)
     app.register_blueprint(planilha_bp)
+    app.register_blueprint(pdf_bp)
 
     @app.route("/")
     def home():

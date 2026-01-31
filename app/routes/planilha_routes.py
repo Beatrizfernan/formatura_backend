@@ -160,50 +160,50 @@ def processar_planilha():
             data_formatura = dados_planilha['data']
         
         # VERIFICAÇÃO DE DUPLICATA
-        formatura_existente = Formatura.objects(
-            nome=dados_planilha['nome_formatura'],
-            data=data_formatura,
-            local=local,
-            ativo=True
-        ).first()
+        # formatura_existente = Formatura.objects(
+        #     nome=dados_planilha['nome_formatura'],
+        #     data=data_formatura,
+        #     local=local,
+        #     ativo=True
+        # ).first()
         
-        if formatura_existente:
-            alocacao_existente = Alocacao.objects(formatura=formatura_existente).first()
+        # if formatura_existente:
+        #     alocacao_existente = Alocacao.objects(formatura=formatura_existente).first()
             
-            resumo_detalhado = []
-            if alocacao_existente:
-                for curso_id in alocacao_existente.get_cursos_alocados():
-                    curso = Curso.get_by_id(curso_id)
-                    if curso:
-                        info_curso = alocacao_existente.get_resumo_por_curso()[curso_id]
-                        resumo_detalhado.append({
-                            'curso': curso.nome,
-                            'total_assentos': info_curso['total_assentos'],
-                            'filas': info_curso['detalhes_filas']
-                        })
+        #     resumo_detalhado = []
+        #     if alocacao_existente:
+        #         for curso_id in alocacao_existente.get_cursos_alocados():
+        #             curso = Curso.get_by_id(curso_id)
+        #             if curso:
+        #                 info_curso = alocacao_existente.get_resumo_por_curso()[curso_id]
+        #                 resumo_detalhado.append({
+        #                     'curso': curso.nome,
+        #                     'total_assentos': info_curso['total_assentos'],
+        #                     'filas': info_curso['detalhes_filas']
+        #                 })
             
-            assentos_vazios = _calcular_assentos_vazios(local, alocacao_existente) if alocacao_existente else []
+        #     assentos_vazios = _calcular_assentos_vazios(local, alocacao_existente) if alocacao_existente else []
             
-            return jsonify({
-                'success': True,
-                'message': 'Formatura já existe - retornando dados existentes',
-                'ja_existia': True,
-                'formatura': {
-                    'id': str(formatura_existente.id),
-                    'nome': formatura_existente.nome,
-                    'data': formatura_existente.data.isoformat(),
-                    'local': local.nome,
-                    'total_formandos': formatura_existente.total_formandos,
-                    'total_assentos': formatura_existente.total_assentos_necessarios
-                },
-                'alocacao': {
-                    'id': str(alocacao_existente.id) if alocacao_existente else None,
-                    'total_alocado': alocacao_existente.total_assentos_alocados if alocacao_existente else 0,
-                    'taxa_ocupacao': f"{round(alocacao_existente.taxa_ocupacao, 2)}%" if alocacao_existente else "0%",
-                    'detalhes': resumo_detalhado,
-                    'assentos_vazios': assentos_vazios
-                } if alocacao_existente else None
-            }), 200
+        #     return jsonify({
+        #         'success': True,
+        #         'message': 'Formatura já existe - retornando dados existentes',
+        #         'ja_existia': True,
+        #         'formatura': {
+        #             'id': str(formatura_existente.id),
+        #             'nome': formatura_existente.nome,
+        #             'data': formatura_existente.data.isoformat(),
+        #             'local': local.nome,
+        #             'total_formandos': formatura_existente.total_formandos,
+        #             'total_assentos': formatura_existente.total_assentos_necessarios
+        #         },
+        #         'alocacao': {
+        #             'id': str(alocacao_existente.id) if alocacao_existente else None,
+        #             'total_alocado': alocacao_existente.total_assentos_alocados if alocacao_existente else 0,
+        #             'taxa_ocupacao': f"{round(alocacao_existente.taxa_ocupacao, 2)}%" if alocacao_existente else "0%",
+        #             'detalhes': resumo_detalhado,
+        #             'assentos_vazios': assentos_vazios
+        #         } if alocacao_existente else None
+        #     }), 200
         
         # Processa cursos
         cursos_criados = []
