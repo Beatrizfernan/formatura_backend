@@ -26,9 +26,7 @@ def allowed_file(filename):
 
 
 def _calcular_assentos_vazios(local, alocacao):
-    """
-    Calcula quais assentos ficaram vazios em cada fila
-    """
+    """Calcula quais assentos ficaram vazios em cada fila"""
     assentos_vazios = []
     
     for fila in local.filas_ordenadas:
@@ -51,41 +49,175 @@ def _calcular_assentos_vazios(local, alocacao):
     return assentos_vazios
 
 
-def _gerar_alocacao_sequencial(formatura):
+def _deletar_formatura_permanentemente(formatura):
+    """Deleta uma formatura permanentemente do banco"""
+    try:
+        Formatura.objects(id=formatura.id).delete()
+    except Exception as e:
+        print(f"Erro ao deletar formatura: {e}")
+
+
+def _gerar_alocacao_vertical_compartilhada(formatura):
     """
-    Aloca sequencialmente pela ORDEM das filas
+    Aloca TODOS OS CURSOS de forma VERTICAL e COMPARTILHADA
+    
+    NOVA LÓGICA:
+    1. Preenche VERTICALMENTE (mesma letra) 
+    2. Preenche PRIMEIRO todas as filas de 1-12 (antes do corredor)
+    3. Só vai para filas 13+ (depois do corredor) quando todas as letras de 1-12 estiverem cheias
+    
+    Exemplo com 3 colunas (A, B, C) e corredor na fila 12:
+    - FARMÁCIA: 1A, 2A, ..., 12A (preenche coluna A até fila 12)
+    - FARMÁCIA continua: 1B, 2B, ... (vai para próxima coluna, ainda antes do corredor)
+    - Quando acabar todas as colunas nas filas 1-12:
+    - MEDICINA: 13A, 14A, ... (só agora vai para depois do corredor)
     """
+    
     alocacao = Alocacao(
         formatura=formatura,
         local=formatura.local,
-        observacoes='Alocação gerada automaticamente - Sequencial por ordem de filas'
+        observacoes='Alocação vertical compartilhada em pares - Preenche antes do corredor primeiro'
     )
     
-    filas = formatura.local.filas_ordenadas
-    assento_atual = 1
-    fila_index = 0
+    # Organiza filas por letra, depois por número
+    import re
+    filas_por_letra = {}
     
+    for fila in formatura.local.filas_ordenadas:
+        match = re.match(r'^(\d+)([A-Z]+)$', fila.nome)
+        if match:
+            numero = int(match.group(1))
+            letra = match.group(2)
+            
+            if letra not in filas_por_letra:
+                filas_por_letra[letra] = []
+            
+            filas_por_letra[letra].append({
+                'nome': fila.nome,
+                'numero': numero,
+                'capacidade': fila.quantidade_assentos,
+                'assento_atual': 1  # Próximo assento livre
+            })
+    
+    # Ordena cada coluna por número
+    for letra in filas_por_letra:
+        filas_por_letra[letra].sort(key=lambda f: f['numero'])
+    
+    # Separa filas ANTES e DEPOIS do corredor
+    LINHA_CORREDOR = 12  # Filas 1-12 antes, 13+ depois
+    
+    filas_antes_corredor = {}
+    filas_depois_corredor = {}
+    
+    for letra, filas_lista in filas_por_letra.items():
+        filas_antes_corredor[letra] = [f for f in filas_lista if f['numero'] <= LINHA_CORREDOR]
+        filas_depois_corredor[letra] = [f for f in filas_lista if f['numero'] > LINHA_CORREDOR]
+    
+    # Remove letras vazias
+    filas_antes_corredor = {k: v for k, v in filas_antes_corredor.items() if v}
+    filas_depois_corredor = {k: v for k, v in filas_depois_corredor.items() if v}
+    
+    # Cria lista ordenada de letras
+    letras_antes = sorted(filas_antes_corredor.keys())
+    letras_depois = sorted(filas_depois_corredor.keys())
+    
+    # Estado global
+    # Primeiro preenche ANTES do corredor
+    regiao_atual = 'antes'  # 'antes' ou 'depois'
+    letra_atual_index = 0
+    fila_atual_index = 0
+    
+    # Processa cada curso sequencialmente
     for curso_formatura in formatura.cursos:
         assentos_necessarios = curso_formatura.qtd_assentos
         
-        while assentos_necessarios > 0 and fila_index < len(filas):
-            fila = filas[fila_index]
-            assentos_disponiveis_na_fila = fila.quantidade_assentos - assento_atual + 1
-            quantidade_a_alocar = min(assentos_necessarios, assentos_disponiveis_na_fila)
-            assentos_alocados = list(range(assento_atual, assento_atual + quantidade_a_alocar))
+        # Validação: deve ser par
+        if assentos_necessarios % 2 != 0:
+            raise ValidationError(
+                f'Curso {curso_formatura.curso_id} com {assentos_necessarios} assentos (ímpar). '
+                f'Cada curso deve ter número PAR de assentos.'
+            )
+        
+        # Aloca este curso
+        while assentos_necessarios > 0:
+            # Escolhe a região atual (antes ou depois do corredor)
+            if regiao_atual == 'antes':
+                letras_disponiveis = letras_antes
+                filas_regiao = filas_antes_corredor
+            else:
+                letras_disponiveis = letras_depois
+                filas_regiao = filas_depois_corredor
             
+            # Verifica se acabaram as letras nesta região
+            if letra_atual_index >= len(letras_disponiveis):
+                if regiao_atual == 'antes':
+                    # Muda para região DEPOIS do corredor
+                    regiao_atual = 'depois'
+                    letra_atual_index = 0
+                    fila_atual_index = 0
+                    
+                    # Se não há filas depois do corredor, erro
+                    if not letras_depois:
+                        raise ValidationError(
+                            f'Não há espaço suficiente no local. Faltam {assentos_necessarios} assentos.'
+                        )
+                    continue
+                else:
+                    # Acabou tudo
+                    raise ValidationError(
+                        f'Não há espaço suficiente no local. Faltam {assentos_necessarios} assentos.'
+                    )
+            
+            letra_atual = letras_disponiveis[letra_atual_index]
+            filas_letra = filas_regiao[letra_atual]
+            
+            # Verifica se acabaram as filas desta letra
+            if fila_atual_index >= len(filas_letra):
+                # Vai para próxima letra na mesma região
+                letra_atual_index += 1
+                fila_atual_index = 0
+                continue
+            
+            fila = filas_letra[fila_atual_index]
+            assento_inicial = fila['assento_atual']
+            
+            # Calcula espaço disponível nesta fila
+            assentos_disponiveis = fila['capacidade'] - assento_inicial + 1
+            
+            # Sempre em pares
+            pares_disponiveis = assentos_disponiveis // 2
+            assentos_disponiveis_pares = pares_disponiveis * 2
+            
+            if assentos_disponiveis_pares == 0:
+                # Fila cheia, vai para próxima
+                fila_atual_index += 1
+                continue
+            
+            # Quanto alocar nesta fila
+            pares_necessarios = assentos_necessarios // 2
+            pares_a_alocar = min(pares_disponiveis, pares_necessarios)
+            assentos_a_alocar = pares_a_alocar * 2
+            
+            # Cria lista de assentos
+            assentos_alocados = list(range(
+                assento_inicial,
+                assento_inicial + assentos_a_alocar
+            ))
+            
+            # Adiciona alocação
             alocacao.adicionar_alocacao_fila(
                 curso_id=curso_formatura.curso_id,
-                fila_nome=fila.nome,
+                fila_nome=fila['nome'],
                 assentos=assentos_alocados
             )
             
-            assentos_necessarios -= quantidade_a_alocar
-            assento_atual += quantidade_a_alocar
+            # Atualiza estado
+            assentos_necessarios -= assentos_a_alocar
+            fila['assento_atual'] += assentos_a_alocar
             
-            if assento_atual > fila.quantidade_assentos:
-                fila_index += 1
-                assento_atual = 1
+            # Se encheu a fila, vai para próxima
+            if fila['assento_atual'] > fila['capacidade']:
+                fila_atual_index += 1
     
     return alocacao
 
@@ -100,6 +232,8 @@ def processar_planilha():
     - arquivo: File (CSV ou Excel)
     - local_id: string (ID do local)
     """
+    formatura = None
+    
     try:
         # Validação: arquivo obrigatório
         if 'arquivo' not in request.files:
@@ -159,52 +293,6 @@ def processar_planilha():
         else:
             data_formatura = dados_planilha['data']
         
-        # VERIFICAÇÃO DE DUPLICATA
-        # formatura_existente = Formatura.objects(
-        #     nome=dados_planilha['nome_formatura'],
-        #     data=data_formatura,
-        #     local=local,
-        #     ativo=True
-        # ).first()
-        
-        # if formatura_existente:
-        #     alocacao_existente = Alocacao.objects(formatura=formatura_existente).first()
-            
-        #     resumo_detalhado = []
-        #     if alocacao_existente:
-        #         for curso_id in alocacao_existente.get_cursos_alocados():
-        #             curso = Curso.get_by_id(curso_id)
-        #             if curso:
-        #                 info_curso = alocacao_existente.get_resumo_por_curso()[curso_id]
-        #                 resumo_detalhado.append({
-        #                     'curso': curso.nome,
-        #                     'total_assentos': info_curso['total_assentos'],
-        #                     'filas': info_curso['detalhes_filas']
-        #                 })
-            
-        #     assentos_vazios = _calcular_assentos_vazios(local, alocacao_existente) if alocacao_existente else []
-            
-        #     return jsonify({
-        #         'success': True,
-        #         'message': 'Formatura já existe - retornando dados existentes',
-        #         'ja_existia': True,
-        #         'formatura': {
-        #             'id': str(formatura_existente.id),
-        #             'nome': formatura_existente.nome,
-        #             'data': formatura_existente.data.isoformat(),
-        #             'local': local.nome,
-        #             'total_formandos': formatura_existente.total_formandos,
-        #             'total_assentos': formatura_existente.total_assentos_necessarios
-        #         },
-        #         'alocacao': {
-        #             'id': str(alocacao_existente.id) if alocacao_existente else None,
-        #             'total_alocado': alocacao_existente.total_assentos_alocados if alocacao_existente else 0,
-        #             'taxa_ocupacao': f"{round(alocacao_existente.taxa_ocupacao, 2)}%" if alocacao_existente else "0%",
-        #             'detalhes': resumo_detalhado,
-        #             'assentos_vazios': assentos_vazios
-        #         } if alocacao_existente else None
-        #     }), 200
-        
         # Processa cursos
         cursos_criados = []
         cursos_existentes = []
@@ -240,16 +328,23 @@ def processar_planilha():
         
         # Verifica capacidade
         if not formatura.capacidade_suficiente:
-            formatura.delete(hard_delete=True)
+            _deletar_formatura_permanentemente(formatura)
             return jsonify({
                 'error': 'Local não tem capacidade suficiente',
                 'assentos_necessarios': formatura.total_assentos_necessarios,
                 'assentos_disponiveis': local.total_assentos
             }), 400
         
-        # Gera alocação
-        alocacao = _gerar_alocacao_sequencial(formatura)
-        alocacao.save()
+        # Gera alocação VERTICAL COMPARTILHADA (preenche antes do corredor primeiro)
+        try:
+            alocacao = _gerar_alocacao_vertical_compartilhada(formatura)
+            alocacao.save()
+        except ValidationError as e:
+            _deletar_formatura_permanentemente(formatura)
+            return jsonify({
+                'error': 'Erro na alocação',
+                'detalhes': str(e)
+            }), 400
         
         formatura.marcar_alocacao_gerada()
         formatura.save()
@@ -270,7 +365,7 @@ def processar_planilha():
         
         return jsonify({
             'success': True,
-            'message': 'Formatura e alocação criadas com sucesso',
+            'message': 'Formatura e alocação criadas com sucesso (vertical compartilhada - preenche antes do corredor)',
             'ja_existia': False,
             'processamento': {
                 'cursos_criados': cursos_criados,
@@ -297,6 +392,12 @@ def processar_planilha():
     except DoesNotExist:
         return jsonify({'error': 'Local não encontrado'}), 404
     except ValidationError as e:
+        if formatura:
+            _deletar_formatura_permanentemente(formatura)
         return jsonify({'error': 'Erro de validação', 'detalhes': str(e)}), 400
     except Exception as e:
+        if formatura:
+            _deletar_formatura_permanentemente(formatura)
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': f'Erro ao processar: {str(e)}'}), 500
