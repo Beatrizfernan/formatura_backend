@@ -1,9 +1,11 @@
 """
-Serviço de geração de PDF - Layout BANCOS - VERSÃO OTIMIZADA
+Serviço de geração de PDF - Layout BANCOS - VERSÃO OTIMIZADA E CORRIGIDA
 Representa a Concha Acústica com bancos corridos
-✨ OTIMIZADO: Texto sempre legível, sem quebras
-
-Alturas totalmente reduzidas para caber 25 filas em 2 páginas
+✨ CORREÇÕES APLICADAS:
+1. Ajuste mais preciso de tamanho de fonte
+2. Padding adequado para evitar cortes
+3. Leading (espaçamento) otimizado
+4. Tratamento especial para siglas longas
 """
 
 from reportlab.lib import colors
@@ -21,7 +23,7 @@ from collections import defaultdict
 
 class PDFMapaAssentosBancos:
     """
-    Gerador de PDF com layout de BANCOS - SUPER OTIMIZADO
+    Gerador de PDF com layout de BANCOS - SUPER OTIMIZADO E CORRIGIDO
     """
     
     CORES_CURSOS = [
@@ -239,22 +241,32 @@ class PDFMapaAssentosBancos:
     def _ajustar_tamanho_fonte(self, texto: str, largura_disponivel: float) -> int:
         """
         Ajusta o tamanho da fonte baseado no comprimento do texto
-        ✨ NOVO: Garante que o texto sempre caiba
+        ✨ MELHORADO: Calcula com margem de segurança para evitar cortes
+        
+        Returns:
+            int: tamanho_fonte otimizado
         """
-        # Estimativa: 1 caractere ≈ 0.6 * tamanho_fonte em mm
+        # Estimativa mais precisa: 1 caractere ≈ 0.55 * tamanho_fonte em mm
+        # Isso considera o padding interno do Paragraph
         tamanho_base = 7
+        fator_largura = 0.55
         
-        largura_texto_mm = len(texto) * 0.6 * tamanho_base
+        # Adiciona margem de segurança (25%)
+        largura_segura = largura_disponivel * 0.75
         
-        if largura_texto_mm > largura_disponivel:
+        largura_texto_mm = len(texto) * fator_largura * tamanho_base
+        
+        if largura_texto_mm > largura_segura:
             # Reduz proporcionalmente
-            tamanho_ajustado = int(tamanho_base * (largura_disponivel / largura_texto_mm))
-            return max(4, tamanho_ajustado)  # Mínimo 4pt
+            tamanho_ajustado = int(tamanho_base * (largura_segura / largura_texto_mm))
+            tamanho_final = max(4, tamanho_ajustado)  # Mínimo 4pt
+        else:
+            tamanho_final = tamanho_base
         
-        return tamanho_base
+        return tamanho_final
     
     def _criar_banco_visual(self, fila: Dict, cores_cursos: Dict, largura: float, rotacao: int = 0) -> Table:
-        """Cria representação visual de um BANCO"""
+        """Cria representação visual de um BANCO com texto otimizado"""
         nome_fila = fila['nome']
         segmentos = fila['segmentos']
         capacidade = fila['capacidade']
@@ -303,14 +315,20 @@ class PDFMapaAssentosBancos:
                 else:
                     sigla = seg.get('abreviacao', curso[:3].upper())
                     
-                    # ✨ NOVO: Ajusta tamanho da fonte baseado no espaço disponível
+                    # ✨ MELHORADO: Ajusta tamanho com margem de segurança
                     tamanho_fonte = self._ajustar_tamanho_fonte(sigla, larg_seg / mm)
-                    tamanho_range = max(4, tamanho_fonte - 1)  # Range um pouco menor
+                    tamanho_range = max(4, tamanho_fonte - 1)
+                    
+                    # Leading adequado baseado no tamanho da fonte
+                    leading_total = (tamanho_fonte + tamanho_range) + 2
+                    
+                    # ✨ NOVO: Padding horizontal para evitar cortes nas bordas
+                    padding_horizontal = max(2, int(larg_seg / mm * 0.08))  # 8% de padding
                     
                     if inicio == fim:
-                        texto = f'<para align="center"><font size="{tamanho_fonte}" color="white"><b>{sigla}</b></font><br/><font size="{tamanho_range}" color="white">{inicio}</font></para>'
+                        texto = f'<para align="center" leftIndent="{padding_horizontal}" rightIndent="{padding_horizontal}" leading="{leading_total}"><font size="{tamanho_fonte}" color="white"><b>{sigla}</b></font><br/><font size="{tamanho_range}" color="white">{inicio}</font></para>'
                     else:
-                        texto = f'<para align="center"><font size="{tamanho_fonte}" color="white"><b>{sigla}</b></font><br/><font size="{tamanho_range}" color="white">{inicio}-{fim}</font></para>'
+                        texto = f'<para align="center" leftIndent="{padding_horizontal}" rightIndent="{padding_horizontal}" leading="{leading_total}"><font size="{tamanho_fonte}" color="white"><b>{sigla}</b></font><br/><font size="{tamanho_range}" color="white">{inicio}-{fim}</font></para>'
                 
                 celula = Paragraph(texto, self.styles['Normal'])
                 celulas.append((celula, cor))
@@ -322,6 +340,11 @@ class PDFMapaAssentosBancos:
             estilo = [
                 ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
                 ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                # ✨ PADDING AUMENTADO: mais espaço para o texto
+                ('LEFTPADDING', (0, 0), (-1, -1), 2),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 2),
+                ('TOPPADDING', (0, 0), (-1, -1), 1),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 1),
             ]
             
             for i, (_, cor) in enumerate(celulas):
