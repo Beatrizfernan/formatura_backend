@@ -6,6 +6,7 @@ Representa a Concha Acústica com bancos corridos
 2. Padding adequado para evitar cortes
 3. Leading (espaçamento) otimizado
 4. Tratamento especial para siglas longas
+5. ✨ NOVO: Range inteligente - mostra "2" se pequeno ou "2 lugares" se grande
 """
 
 from reportlab.lib import colors
@@ -272,9 +273,9 @@ class PDFMapaAssentosBancos:
         capacidade = fila['capacidade']
         
         if rotacao == 180:
-            nome_display = f'<para align="center"><font size="7"><b>▼ {nome_fila} ▼</b></font><br/><font size="6" color="#6b7280">({capacidade})</font></para>'
+            nome_display = f'<para align="center"><font size="7"><b>▼ {nome_fila} ▼</b></font><br/><font size="6" color="#6b7280">({capacidade} lugares)</font></para>'
         else:
-            nome_display = f'<para align="center"><font size="7"><b>{nome_fila}</b></font><br/><font size="6" color="#6b7280">({capacidade})</font></para>'
+            nome_display = f'<para align="center"><font size="7"><b>{nome_fila}</b></font><br/><font size="6" color="#6b7280">({capacidade} lugares)</font></para>'
         
         header = [[Paragraph(nome_display, self.styles['NomeFila'])]]
         
@@ -325,10 +326,22 @@ class PDFMapaAssentosBancos:
                     # ✨ NOVO: Padding horizontal para evitar cortes nas bordas
                     padding_horizontal = max(2, int(larg_seg / mm * 0.08))  # 8% de padding
                     
+                    # ✨✨ CORRIGIDO: Lógica inteligente para exibição do range
+                    # SEMPRE mostra a QUANTIDADE de lugares, nunca o número do assento
+                    # Se assento único: mostra só o número (quantidade = 1)
+                    # Se pequeno (até 4 lugares): mostra só a quantidade
+                    # Se grande (5+ lugares): mostra "X lugares"
                     if inicio == fim:
-                        texto = f'<para align="center" leftIndent="{padding_horizontal}" rightIndent="{padding_horizontal}" leading="{leading_total}"><font size="{tamanho_fonte}" color="white"><b>{sigla}</b></font><br/><font size="{tamanho_range}" color="white">{inicio}</font></para>'
+                        range_texto = str(qtd)  # Quantidade = 1
                     else:
-                        texto = f'<para align="center" leftIndent="{padding_horizontal}" rightIndent="{padding_horizontal}" leading="{leading_total}"><font size="{tamanho_fonte}" color="white"><b>{sigla}</b></font><br/><font size="{tamanho_range}" color="white">{inicio}-{fim}</font></para>'
+                        if qtd <= 4:
+                            # Mostra a QUANTIDADE (não o último assento)
+                            range_texto = str(qtd)
+                        else:
+                            # Para 5+ lugares, mostra "X lugares"
+                            range_texto = f"{qtd} lugares"
+                    
+                    texto = f'<para align="center" leftIndent="{padding_horizontal}" rightIndent="{padding_horizontal}" leading="{leading_total}"><font size="{tamanho_fonte}" color="white"><b>{sigla}</b></font><br/><font size="{tamanho_range}" color="white">{range_texto}</font></para>'
                 
                 celula = Paragraph(texto, self.styles['Normal'])
                 celulas.append((celula, cor))

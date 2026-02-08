@@ -64,19 +64,15 @@ def _gerar_alocacao_vertical_compartilhada(formatura):
     NOVA LÓGICA:
     1. Preenche VERTICALMENTE (mesma letra) 
     2. Preenche PRIMEIRO todas as filas de 1-12 (antes do corredor)
-    3. Só vai para filas 13+ (depois do corredor) quando todas as letras de 1-12 estiverem cheias
-    
-    Exemplo com 3 colunas (A, B, C) e corredor na fila 12:
-    - FARMÁCIA: 1A, 2A, ..., 12A (preenche coluna A até fila 12)
-    - FARMÁCIA continua: 1B, 2B, ... (vai para próxima coluna, ainda antes do corredor)
-    - Quando acabar todas as colunas nas filas 1-12:
-    - MEDICINA: 13A, 14A, ... (só agora vai para depois do corredor)
+    3. Após o corredor:
+       - Cursos que começam ANTES do corredor continuam na MESMA COLUNA
+       - Novos cursos preenchem da DIREITA para ESQUERDA (D → C → B → A)
     """
     
     alocacao = Alocacao(
         formatura=formatura,
         local=formatura.local,
-        observacoes='Alocação vertical compartilhada em pares - Preenche antes do corredor primeiro'
+        observacoes='Alocação vertical compartilhada - Cursos atravessam corredor na mesma coluna'
     )
     
     # Organiza filas por letra, depois por número
@@ -96,7 +92,7 @@ def _gerar_alocacao_vertical_compartilhada(formatura):
                 'nome': fila.nome,
                 'numero': numero,
                 'capacidade': fila.quantidade_assentos,
-                'assento_atual': 1  # Próximo assento livre
+                'assento_atual': 1
             })
     
     # Ordena cada coluna por número
@@ -104,7 +100,7 @@ def _gerar_alocacao_vertical_compartilhada(formatura):
         filas_por_letra[letra].sort(key=lambda f: f['numero'])
     
     # Separa filas ANTES e DEPOIS do corredor
-    LINHA_CORREDOR = 12  # Filas 1-12 antes, 13+ depois
+    LINHA_CORREDOR = 12
     
     filas_antes_corredor = {}
     filas_depois_corredor = {}
@@ -119,33 +115,50 @@ def _gerar_alocacao_vertical_compartilhada(formatura):
     
     # Cria lista ordenada de letras
     letras_antes = sorted(filas_antes_corredor.keys())
-    letras_depois = sorted(filas_depois_corredor.keys())
+    letras_depois = sorted(filas_depois_corredor.keys(), reverse=True)  # INVERTIDO: D → C → B → A
     
     # Estado global
-    # Primeiro preenche ANTES do corredor
-    regiao_atual = 'antes'  # 'antes' ou 'depois'
+    regiao_atual = 'antes'
     letra_atual_index = 0
     fila_atual_index = 0
+    
+    # Rastreia qual letra cada curso está usando
+    curso_letra_map = {}
     
     # Processa cada curso sequencialmente
     for curso_formatura in formatura.cursos:
         assentos_necessarios = curso_formatura.qtd_assentos
+        curso_id = curso_formatura.curso_id
         
         # Validação: deve ser par
         if assentos_necessarios % 2 != 0:
             raise ValidationError(
-                f'Curso {curso_formatura.curso_id} com {assentos_necessarios} assentos (ímpar). '
+                f'Curso {curso_id} com {assentos_necessarios} assentos (ímpar). '
                 f'Cada curso deve ter número PAR de assentos.'
             )
         
         # Aloca este curso
         while assentos_necessarios > 0:
-            # Escolhe a região atual (antes ou depois do corredor)
+            # Escolhe a região atual
             if regiao_atual == 'antes':
                 letras_disponiveis = letras_antes
                 filas_regiao = filas_antes_corredor
             else:
-                letras_disponiveis = letras_depois
+                # DEPOIS DO CORREDOR
+                # Verifica se o curso já tinha começado antes
+                if curso_id in curso_letra_map:
+                    # Continua na MESMA COLUNA
+                    letra_continua = curso_letra_map[curso_id]
+                    if letra_continua in filas_depois_corredor:
+                        letras_disponiveis = [letra_continua]
+                        letra_atual_index = 0
+                    else:
+                        # Letra não existe após corredor, usar comportamento normal
+                        letras_disponiveis = letras_depois
+                else:
+                    # Novo curso após corredor: preenche da DIREITA para ESQUERDA
+                    letras_disponiveis = letras_depois
+                
                 filas_regiao = filas_depois_corredor
             
             # Verifica se acabaram as letras nesta região
@@ -170,6 +183,10 @@ def _gerar_alocacao_vertical_compartilhada(formatura):
             
             letra_atual = letras_disponiveis[letra_atual_index]
             filas_letra = filas_regiao[letra_atual]
+            
+            # Registra que este curso está usando esta letra (se estamos antes do corredor)
+            if regiao_atual == 'antes':
+                curso_letra_map[curso_id] = letra_atual
             
             # Verifica se acabaram as filas desta letra
             if fila_atual_index >= len(filas_letra):
@@ -335,7 +352,7 @@ def processar_planilha():
                 'assentos_disponiveis': local.total_assentos
             }), 400
         
-        # Gera alocação VERTICAL COMPARTILHADA (preenche antes do corredor primeiro)
+        # Gera alocação VERTICAL COMPARTILHADA (cursos atravessam corredor na mesma coluna)
         try:
             alocacao = _gerar_alocacao_vertical_compartilhada(formatura)
             alocacao.save()
@@ -365,7 +382,7 @@ def processar_planilha():
         
         return jsonify({
             'success': True,
-            'message': 'Formatura e alocação criadas com sucesso (vertical compartilhada - preenche antes do corredor)',
+            'message': 'Formatura e alocação criadas com sucesso (cursos atravessam corredor na mesma coluna)',
             'ja_existia': False,
             'processamento': {
                 'cursos_criados': cursos_criados,
