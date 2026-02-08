@@ -1,4 +1,3 @@
-
 from mongoengine import StringField, ValidationError, queryset_manager
 from . import BaseModel, SoftDeleteMixin
 import re
@@ -10,7 +9,7 @@ class Curso(BaseModel, SoftDeleteMixin):
         'collection': 'cursos',
         'indexes': [
             {'fields': ['nome'], 'unique': True, 'partialFilterExpression': {'ativo': True}},
-            {'fields': ['abreviacao'], 'unique': True, 'sparse': True},  # sparse permite None
+            {'fields': ['abreviacao'], 'unique': True, 'sparse': True},
             'ativo',
             'created_at',
             'updated_at'
@@ -18,8 +17,8 @@ class Curso(BaseModel, SoftDeleteMixin):
     }
     
     nome = StringField(required=True, max_length=100)
-    abreviacao = StringField(required=False, max_length=5, min_length=2)  # Agora opcional
-    cor = StringField(required=False, max_length=7)  # Agora opcional
+    abreviacao = StringField(required=False, max_length=20, min_length=2)  # ✅ ALTERADO: max_length=20
+    cor = StringField(required=False, max_length=7)
     
     def clean(self):
         """Validação customizada do modelo"""
@@ -27,7 +26,7 @@ class Curso(BaseModel, SoftDeleteMixin):
         if self.nome:
             self.nome = self.nome.strip()
         if self.abreviacao:
-            self.abreviacao = self.abreviacao.strip().upper()
+            self.abreviacao = self.abreviacao.strip()  # ✅ REMOVIDO .upper() para manter "Farm" com F maiúsculo
         if self.cor:
             self.cor = self.cor.strip()
         
@@ -41,8 +40,8 @@ class Curso(BaseModel, SoftDeleteMixin):
         if self.abreviacao:
             if len(self.abreviacao) < 2:
                 errors['abreviacao'] = 'Abreviação deve ter pelo menos 2 caracteres'
-            if len(self.abreviacao) > 5:
-                errors['abreviacao'] = 'Abreviação deve ter no máximo 5 caracteres'
+            if len(self.abreviacao) > 20:
+                errors['abreviacao'] = 'Abreviação deve ter no máximo 20 caracteres'
         
         # Valida cor hexadecimal (apenas se fornecida)
         if self.cor and not re.match(r'^#[0-9A-Fa-f]{6}$', self.cor):

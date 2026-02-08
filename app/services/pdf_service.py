@@ -1,7 +1,7 @@
 """
-Serviço de geração de PDF - Layout BANCOS - VERSÃO SUPER OTIMIZADA
+Serviço de geração de PDF - Layout BANCOS - VERSÃO OTIMIZADA
 Representa a Concha Acústica com bancos corridos
-OTIMIZAÇÃO MÁXIMA para caber em apenas 3 páginas (1 legenda + 2 mapa)
+✨ OTIMIZADO: Texto sempre legível, sem quebras
 
 Alturas totalmente reduzidas para caber 25 filas em 2 páginas
 """
@@ -129,6 +129,7 @@ class PDFMapaAssentosBancos:
         capacidade = self._calcular_capacidade_real(fila_info, detalhes, vazios)
         
         mapa = {}
+        abreviacoes = {}
         
         for det in detalhes:
             for f in det['filas']:
@@ -138,6 +139,11 @@ class PDFMapaAssentosBancos:
                         start, end = map(int, r.split('-'))
                         for n in range(start, end + 1):
                             mapa[n] = det['curso']
+                            abreviacoes[det['curso']] = det.get('abreviacao', det['curso'][:3].upper())
+                    else:
+                        num = int(r)
+                        mapa[num] = det['curso']
+                        abreviacoes[det['curso']] = det.get('abreviacao', det['curso'][:3].upper())
         
         for v in vazios:
             if v['fila'] == nome_fila:
@@ -172,6 +178,7 @@ class PDFMapaAssentosBancos:
                 fim_seg = numeros_ordenados[i-1]
                 segmentos.append({
                     'curso': curso_seg,
+                    'abreviacao': abreviacoes.get(curso_seg, curso_seg[:3].upper()),
                     'inicio': inicio_seg,
                     'fim': fim_seg,
                     'quantidade': fim_seg - inicio_seg + 1
@@ -183,6 +190,7 @@ class PDFMapaAssentosBancos:
         fim_seg = numeros_ordenados[-1]
         segmentos.append({
             'curso': curso_seg,
+            'abreviacao': abreviacoes.get(curso_seg, curso_seg[:3].upper()),
             'inicio': inicio_seg,
             'fim': fim_seg,
             'quantidade': fim_seg - inicio_seg + 1
@@ -227,6 +235,23 @@ class PDFMapaAssentosBancos:
             linhas[num].sort(key=lambda f: f['letra'])
         
         return dict(linhas)
+    
+    def _ajustar_tamanho_fonte(self, texto: str, largura_disponivel: float) -> int:
+        """
+        Ajusta o tamanho da fonte baseado no comprimento do texto
+        ✨ NOVO: Garante que o texto sempre caiba
+        """
+        # Estimativa: 1 caractere ≈ 0.6 * tamanho_fonte em mm
+        tamanho_base = 7
+        
+        largura_texto_mm = len(texto) * 0.6 * tamanho_base
+        
+        if largura_texto_mm > largura_disponivel:
+            # Reduz proporcionalmente
+            tamanho_ajustado = int(tamanho_base * (largura_disponivel / largura_texto_mm))
+            return max(4, tamanho_ajustado)  # Mínimo 4pt
+        
+        return tamanho_base
     
     def _criar_banco_visual(self, fila: Dict, cores_cursos: Dict, largura: float, rotacao: int = 0) -> Table:
         """Cria representação visual de um BANCO"""
@@ -276,11 +301,16 @@ class PDFMapaAssentosBancos:
                     else:
                         texto = f'<para align="center"><font size="6" color="#6b7280">{inicio}-{fim}</font></para>'
                 else:
-                    sigla = curso[:3].upper()
+                    sigla = seg.get('abreviacao', curso[:3].upper())
+                    
+                    # ✨ NOVO: Ajusta tamanho da fonte baseado no espaço disponível
+                    tamanho_fonte = self._ajustar_tamanho_fonte(sigla, larg_seg / mm)
+                    tamanho_range = max(4, tamanho_fonte - 1)  # Range um pouco menor
+                    
                     if inicio == fim:
-                        texto = f'<para align="center"><font size="7" color="white"><b>{sigla}</b></font><br/><font size="6" color="white">{inicio}</font></para>'
+                        texto = f'<para align="center"><font size="{tamanho_fonte}" color="white"><b>{sigla}</b></font><br/><font size="{tamanho_range}" color="white">{inicio}</font></para>'
                     else:
-                        texto = f'<para align="center"><font size="7" color="white"><b>{sigla}</b></font><br/><font size="6" color="white">{inicio}-{fim}</font></para>'
+                        texto = f'<para align="center"><font size="{tamanho_fonte}" color="white"><b>{sigla}</b></font><br/><font size="{tamanho_range}" color="white">{inicio}-{fim}</font></para>'
                 
                 celula = Paragraph(texto, self.styles['Normal'])
                 celulas.append((celula, cor))

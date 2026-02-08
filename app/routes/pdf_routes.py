@@ -1,5 +1,7 @@
 """
 Rota para geração e download de PDF do mapa de assentos
+
+✨ ATUALIZADO: Agora passa as abreviações dos cursos para o PDF
 """
 
 from flask import Blueprint, jsonify, send_file, request
@@ -65,7 +67,7 @@ def download_pdf_mapa(formatura_id):
         # Prepara dados para o PDF
         local = formatura.local
         
-        # Monta resumo detalhado por curso
+        # ✨ NOVO: Monta resumo detalhado por curso COM ABREVIAÇÃO
         resumo_detalhado = []
         for curso_id in alocacao.get_cursos_alocados():
             curso = Curso.get_by_id(curso_id)
@@ -73,6 +75,7 @@ def download_pdf_mapa(formatura_id):
                 info_curso = alocacao.get_resumo_por_curso()[curso_id]
                 resumo_detalhado.append({
                     'curso': curso.nome,
+                    'abreviacao': curso.abreviacao if curso.abreviacao else curso.nome[:3].upper(),  # ✨ NOVO
                     'total_assentos': info_curso['total_assentos'],
                     'filas': info_curso['detalhes_filas']
                 })
@@ -127,6 +130,7 @@ def preview_pdf_mapa(formatura_id):
         
         local = formatura.local
         
+        # ✨ NOVO: Monta resumo detalhado por curso COM ABREVIAÇÃO
         resumo_detalhado = []
         for curso_id in alocacao.get_cursos_alocados():
             curso = Curso.get_by_id(curso_id)
@@ -134,6 +138,7 @@ def preview_pdf_mapa(formatura_id):
                 info_curso = alocacao.get_resumo_por_curso()[curso_id]
                 resumo_detalhado.append({
                     'curso': curso.nome,
+                    'abreviacao': curso.abreviacao if curso.abreviacao else curso.nome[:3].upper(),  # ✨ NOVO
                     'total_assentos': info_curso['total_assentos'],
                     'filas': info_curso['detalhes_filas']
                 })
