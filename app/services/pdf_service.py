@@ -1,440 +1,423 @@
 """
-Serviço de geração de PDF - Layout BANCOS - VERSÃO OTIMIZADA E CORRIGIDA
-Representa a Concha Acústica com bancos corridos
-✨ CORREÇÕES APLICADAS:
-1. Ajuste mais preciso de tamanho de fonte
-2. Padding adequado para evitar cortes
-3. Leading (espaçamento) otimizado
-4. Tratamento especial para siglas longas
-5. ✨ NOVO: Range inteligente - mostra "2" se pequeno ou "2 lugares" se grande
+Serviço de geração de PDF — Layout BANCOS
+Legendas maiores, sem transbordar, texto proporcional ao espaço disponível.
 """
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A3, landscape
 from reportlab.lib.units import mm
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
+from reportlab.platypus import (
+    SimpleDocTemplate, Table, TableStyle,
+    Paragraph, Spacer, PageBreak,
+)
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER, TA_LEFT
-from reportlab.pdfgen import canvas
 from io import BytesIO
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any
 import re
 from collections import defaultdict
 
 
 class PDFMapaAssentosBancos:
-    """
-    Gerador de PDF com layout de BANCOS - SUPER OTIMIZADO E CORRIGIDO
-    """
-    
+
     CORES_CURSOS = [
-        colors.HexColor('#2563eb'),  # blue-600
-        colors.HexColor('#059669'),  # emerald-600
-        colors.HexColor('#d97706'),  # amber-600
-        colors.HexColor('#9333ea'),  # purple-600
-        colors.HexColor('#dc2626'),  # red-600
-        colors.HexColor('#0891b2'),  # cyan-600
-        colors.HexColor('#ea580c'),  # orange-600
-        colors.HexColor('#db2777'),  # pink-600
-        colors.HexColor('#65a30d'),  # lime-600
-        colors.HexColor('#7c3aed'),  # violet-600
+        colors.HexColor('#2563eb'),
+        colors.HexColor('#059669'),
+        colors.HexColor('#d97706'),
+        colors.HexColor('#9333ea'),
+        colors.HexColor('#dc2626'),
+        colors.HexColor('#0891b2'),
+        colors.HexColor('#ea580c'),
+        colors.HexColor('#db2777'),
+        colors.HexColor('#65a30d'),
+        colors.HexColor('#7c3aed'),
+        colors.HexColor('#0d9488'),
+        colors.HexColor('#b91c1c'),
+        colors.HexColor('#4338ca'),
+        colors.HexColor('#0284c7'),
     ]
-    
-    COR_VAZIO = colors.HexColor('#e5e7eb')
-    COR_PALCO = colors.HexColor('#1f2937')
-    COR_HEADER = colors.HexColor('#f3f4f6')
-    COR_BORDA = colors.HexColor('#d1d5db')
-    COR_TEXTO = colors.HexColor('#374151')
+
+    COR_VAZIO    = colors.HexColor('#f3f4f6')
+    COR_PALCO    = colors.HexColor('#1f2937')
+    COR_HEADER   = colors.HexColor('#f9fafb')
+    COR_BORDA    = colors.HexColor('#d1d5db')
+    COR_TEXTO    = colors.HexColor('#374151')
     COR_CORREDOR = colors.HexColor('#6b7280')
-    
-    # Altura MUITO REDUZIDA - Total por fila: 16mm (era 28mm)
-    ALTURA_HEADER_FILA = 6 * mm  
-    ALTURA_CONTEUDO_FILA = 10 * mm  
-    
+
+    # Alturas das filas no mapa
+    ALTURA_HEADER  = 5 * mm
+    ALTURA_CONTEUDO = 9 * mm
+
     def __init__(self):
-        self.buffer = BytesIO()
+        self.buffer   = BytesIO()
         self.pagesize = landscape(A3)
         self.width, self.height = self.pagesize
-        
-        self.MARGEM = 6 * mm
-        self.LARGURA_UTIL = self.width - (2 * self.MARGEM)
-        self.ALTURA_UTIL = self.height - (2 * self.MARGEM)
-        
+        self.MARGEM       = 8 * mm
+        self.LARGURA_UTIL = self.width  - 2 * self.MARGEM
+        self.ALTURA_UTIL  = self.height - 2 * self.MARGEM
         self.styles = getSampleStyleSheet()
         self._criar_estilos()
-    
+
     def _criar_estilos(self):
-        """Estilos customizados"""
         self.styles.add(ParagraphStyle(
-            name='Titulo',
-            fontSize=24,
-            leading=28,
+            name='Titulo', fontSize=22, leading=26,
             textColor=colors.HexColor('#111827'),
-            alignment=TA_CENTER,
-            fontName='Helvetica-Bold',
-            spaceAfter=3
+            alignment=TA_CENTER, fontName='Helvetica-Bold', spaceAfter=2,
         ))
-        
         self.styles.add(ParagraphStyle(
-            name='Subtitulo',
-            fontSize=11,
-            leading=14,
+            name='Subtitulo', fontSize=10, leading=13,
             textColor=colors.HexColor('#6b7280'),
-            alignment=TA_CENTER,
-            fontName='Helvetica',
-            spaceAfter=6
+            alignment=TA_CENTER, fontName='Helvetica', spaceAfter=4,
         ))
-        
         self.styles.add(ParagraphStyle(
-            name='NomeFila',
-            fontSize=8,
-            leading=9,
-            textColor=self.COR_TEXTO,
-            alignment=TA_CENTER,
-            fontName='Helvetica-Bold'
+            name='NomeFila', fontSize=7, leading=8,
+            textColor=self.COR_TEXTO, alignment=TA_CENTER, fontName='Helvetica-Bold',
         ))
-        
-        self.styles.add(ParagraphStyle(
-            name='SegmentoCurso',
-            fontSize=7,
-            leading=8,
-            textColor=colors.white,
-            alignment=TA_CENTER,
-            fontName='Helvetica-Bold'
-        ))
-    
-    def _calcular_capacidade_real(self, fila_info: Dict, detalhes: List[Dict], vazios: List[Dict]) -> int:
-        """Calcula a capacidade real da fila"""
-        nome_fila = fila_info['nome']
-        max_assento = 0
-        
+
+    # ------------------------------------------------------------------ #
+    # Helpers de processamento
+    # ------------------------------------------------------------------ #
+
+    def _processar_fila(self, nome_fila: str, detalhes, vazios) -> Dict:
+        """Monta segmentos de curso para uma fila."""
+        mapa: Dict[int, str]  = {}
+        abrevs: Dict[str, str] = {}
+
         for det in detalhes:
             for f in det['filas']:
-                if f['fila'] == nome_fila:
-                    r = f['range']
-                    if '-' in r:
-                        _, end = map(int, r.split('-'))
-                        max_assento = max(max_assento, end)
-                    else:
-                        num = int(r)
-                        max_assento = max(max_assento, num)
-        
-        for v in vazios:
-            if v['fila'] == nome_fila:
-                for num in v['assentos_vazios']:
-                    max_assento = max(max_assento, num)
-        
-        return max_assento if max_assento > 0 else fila_info.get('capacidade', 0)
-    
-    def _processar_fila(self, fila_info: Dict, detalhes: List[Dict], vazios: List[Dict]) -> Dict:
-        """Processa uma fila e identifica segmentos de cursos"""
-        nome_fila = fila_info['nome']
-        capacidade = self._calcular_capacidade_real(fila_info, detalhes, vazios)
-        
-        mapa = {}
-        abreviacoes = {}
-        
-        for det in detalhes:
-            for f in det['filas']:
-                if f['fila'] == nome_fila:
-                    r = f['range']
-                    if '-' in r:
-                        start, end = map(int, r.split('-'))
-                        for n in range(start, end + 1):
-                            mapa[n] = det['curso']
-                            abreviacoes[det['curso']] = det.get('abreviacao', det['curso'][:3].upper())
-                    else:
-                        num = int(r)
-                        mapa[num] = det['curso']
-                        abreviacoes[det['curso']] = det.get('abreviacao', det['curso'][:3].upper())
-        
+                if f['fila'] != nome_fila:
+                    continue
+                r = f['range']
+                if '-' in r:
+                    s, e = map(int, r.split('-'))
+                else:
+                    s = e = int(r)
+                for n in range(s, e + 1):
+                    mapa[n] = det['curso']
+                abrevs[det['curso']] = det.get('abreviacao', det['curso'][:3].upper())
+
         for v in vazios:
             if v['fila'] == nome_fila:
                 for n in v['assentos_vazios']:
                     mapa[n] = 'VAZIO'
-        
-        segmentos = []
+
         if not mapa:
-            return {
-                'nome': nome_fila,
-                'capacidade': capacidade,
-                'segmentos': []
-            }
-        
-        numeros_ordenados = sorted(mapa.keys())
-        
-        if not numeros_ordenados:
-            return {
-                'nome': nome_fila,
-                'capacidade': capacidade,
-                'segmentos': []
-            }
-        
-        inicio_seg = numeros_ordenados[0]
-        curso_seg = mapa[inicio_seg]
-        
-        for i in range(1, len(numeros_ordenados)):
-            num_atual = numeros_ordenados[i]
-            curso_atual = mapa[num_atual]
-            
-            if curso_atual != curso_seg or num_atual != numeros_ordenados[i-1] + 1:
-                fim_seg = numeros_ordenados[i-1]
+            return {'nome': nome_fila, 'capacidade': 0, 'segmentos': []}
+
+        nums = sorted(mapa)
+        capacidade = max(nums)
+        segmentos  = []
+        inicio = nums[0]
+        atual  = mapa[inicio]
+
+        for i in range(1, len(nums)):
+            n = nums[i]
+            c = mapa[n]
+            if c != atual or n != nums[i - 1] + 1:
                 segmentos.append({
-                    'curso': curso_seg,
-                    'abreviacao': abreviacoes.get(curso_seg, curso_seg[:3].upper()),
-                    'inicio': inicio_seg,
-                    'fim': fim_seg,
-                    'quantidade': fim_seg - inicio_seg + 1
+                    'curso': atual,
+                    'abreviacao': abrevs.get(atual, atual[:3].upper()),
+                    'inicio': inicio, 'fim': nums[i - 1],
+                    'quantidade': nums[i - 1] - inicio + 1,
                 })
-                
-                inicio_seg = num_atual
-                curso_seg = curso_atual
-        
-        fim_seg = numeros_ordenados[-1]
+                inicio = n
+                atual  = c
         segmentos.append({
-            'curso': curso_seg,
-            'abreviacao': abreviacoes.get(curso_seg, curso_seg[:3].upper()),
-            'inicio': inicio_seg,
-            'fim': fim_seg,
-            'quantidade': fim_seg - inicio_seg + 1
+            'curso': atual,
+            'abreviacao': abrevs.get(atual, atual[:3].upper()),
+            'inicio': inicio, 'fim': nums[-1],
+            'quantidade': nums[-1] - inicio + 1,
         })
-        
-        return {
-            'nome': nome_fila,
-            'capacidade': capacidade,
-            'segmentos': segmentos
-        }
-    
-    def _agrupar_filas_por_linha(self, detalhes: List[Dict], vazios: List[Dict]) -> Dict[int, List[Dict]]:
-        """Agrupa filas pelo número da linha"""
-        
-        todas_filas = {}
-        
+
+        return {'nome': nome_fila, 'capacidade': capacidade, 'segmentos': segmentos}
+
+    def _agrupar_por_linha(self, detalhes, vazios) -> Dict[int, List[Dict]]:
+        todas = {}
         for det in detalhes:
             for f in det['filas']:
-                nome = f['fila']
-                if nome not in todas_filas:
-                    todas_filas[nome] = {'nome': nome, 'capacidade': 0}
-        
+                if f['fila'] not in todas:
+                    todas[f['fila']] = None
         for v in vazios:
-            nome = v['fila']
-            if nome not in todas_filas:
-                todas_filas[nome] = {'nome': nome, 'capacidade': 0}
-        
-        filas_processadas = {}
-        for nome_fila, info in todas_filas.items():
-            filas_processadas[nome_fila] = self._processar_fila(info, detalhes, vazios)
-        
-        linhas = defaultdict(list)
-        for nome_fila, fila_proc in filas_processadas.items():
-            m = re.match(r'^(\d+)([A-Z]+)$', nome_fila)
+            if v['fila'] not in todas:
+                todas[v['fila']] = None
+
+        processadas = {nome: self._processar_fila(nome, detalhes, vazios) for nome in todas}
+
+        linhas: Dict[int, List] = defaultdict(list)
+        for nome, fila in processadas.items():
+            m = re.match(r'^(\d+)([A-Z]+)$', nome)
             if m:
-                num = int(m.group(1))
-                letra = m.group(2)
-                fila_proc['letra'] = letra
-                linhas[num].append(fila_proc)
-        
+                num    = int(m.group(1))
+                letra  = m.group(2)
+                fila['letra'] = letra
+                linhas[num].append(fila)
+
         for num in linhas:
             linhas[num].sort(key=lambda f: f['letra'])
-        
+
         return dict(linhas)
-    
-    def _ajustar_tamanho_fonte(self, texto: str, largura_disponivel: float) -> int:
+
+    # ------------------------------------------------------------------ #
+    # Banco visual (uma fila)
+    # ------------------------------------------------------------------ #
+
+    def _texto_segmento(self, seg: Dict, larg_mm: float) -> str:
         """
-        Ajusta o tamanho da fonte baseado no comprimento do texto
-        ✨ MELHORADO: Calcula com margem de segurança para evitar cortes
-        
-        Returns:
-            int: tamanho_fonte otimizado
+        Gera HTML do segmento com tamanho de fonte proporcional ao espaço,
+        garantindo que não transborde.
         """
-        # Estimativa mais precisa: 1 caractere ≈ 0.55 * tamanho_fonte em mm
-        # Isso considera o padding interno do Paragraph
-        tamanho_base = 7
-        fator_largura = 0.55
-        
-        # Adiciona margem de segurança (25%)
-        largura_segura = largura_disponivel * 0.75
-        
-        largura_texto_mm = len(texto) * fator_largura * tamanho_base
-        
-        if largura_texto_mm > largura_segura:
-            # Reduz proporcionalmente
-            tamanho_ajustado = int(tamanho_base * (largura_segura / largura_texto_mm))
-            tamanho_final = max(4, tamanho_ajustado)  # Mínimo 4pt
+        if seg['curso'] == 'VAZIO':
+            qtd = seg['quantidade']
+            label = str(qtd) if qtd == 1 else f"{qtd}"
+            return f'<para align="center"><font size="6" color="#9ca3af">{label}</font></para>'
+
+        sigla = seg['abreviacao']
+        qtd   = seg['quantidade']
+
+        # Tamanho da fonte da sigla: proporcional à largura, máx 9, mín 5
+        # ~0.55pt por caractere por pt de fonte
+        tamanho_sigla = min(9, max(5, int(larg_mm * 0.9 / max(len(sigla), 1))))
+
+        # Range: sempre mostra quantidade de lugares (não número do assento)
+        if qtd <= 1:
+            range_str = ""
+        elif qtd <= 6:
+            range_str = str(qtd)
         else:
-            tamanho_final = tamanho_base
-        
-        return tamanho_final
-    
-    def _criar_banco_visual(self, fila: Dict, cores_cursos: Dict, largura: float, rotacao: int = 0) -> Table:
-        """Cria representação visual de um BANCO com texto otimizado"""
-        nome_fila = fila['nome']
-        segmentos = fila['segmentos']
+            range_str = f"{qtd}lug"
+
+        tamanho_range = max(4, tamanho_sigla - 2)
+        leading = tamanho_sigla + tamanho_range + 2
+
+        if range_str:
+            return (
+                f'<para align="center" leading="{leading}">'
+                f'<font size="{tamanho_sigla}" color="white"><b>{sigla}</b></font>'
+                f'<br/>'
+                f'<font size="{tamanho_range}" color="white">{range_str}</font>'
+                f'</para>'
+            )
+        else:
+            return (
+                f'<para align="center">'
+                f'<font size="{tamanho_sigla}" color="white"><b>{sigla}</b></font>'
+                f'</para>'
+            )
+
+    def _criar_banco(self, fila: Dict, cores: Dict, largura: float) -> Table:
+        nome_fila  = fila['nome']
+        segmentos  = fila['segmentos']
         capacidade = fila['capacidade']
-        
-        if rotacao == 180:
-            nome_display = f'<para align="center"><font size="7"><b>▼ {nome_fila} ▼</b></font><br/><font size="6" color="#6b7280">({capacidade} lugares)</font></para>'
-        else:
-            nome_display = f'<para align="center"><font size="7"><b>{nome_fila}</b></font><br/><font size="6" color="#6b7280">({capacidade} lugares)</font></para>'
-        
-        header = [[Paragraph(nome_display, self.styles['NomeFila'])]]
-        
+
+        # Header
+        header_html = (
+            f'<para align="center">'
+            f'<font size="7"><b>{nome_fila}</b></font>'
+            f'<br/>'
+            f'<font size="6" color="#9ca3af">({capacidade} lug.)</font>'
+            f'</para>'
+        )
+        header_t = Table(
+            [[Paragraph(header_html, self.styles['NomeFila'])]],
+            colWidths=[largura - 1 * mm], rowHeights=[self.ALTURA_HEADER],
+        )
+        header_t.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, -1), self.COR_HEADER),
+            ('ALIGN',      (0, 0), (-1, -1), 'CENTER'),
+            ('VALIGN',     (0, 0), (-1, -1), 'MIDDLE'),
+            ('BOX',        (0, 0), (-1, -1), 0.3, self.COR_BORDA),
+            ('TOPPADDING',    (0, 0), (-1, -1), 1),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 1),
+        ]))
+
+        # Conteúdo
         if not segmentos:
-            vazio_html = '<para align="center"><font size="7" color="#9ca3af"><i>Vazio</i></font></para>'
-            conteudo = [[Paragraph(vazio_html, self.styles['Normal'])]]
-            
-            conteudo_table = Table(conteudo, colWidths=[largura - 2*mm], rowHeights=[self.ALTURA_CONTEUDO_FILA])
-            conteudo_table.setStyle(TableStyle([
+            conteudo_t = Table(
+                [[Paragraph('<para align="center"><font size="6" color="#9ca3af">—</font></para>', self.styles['Normal'])]],
+                colWidths=[largura - 1 * mm], rowHeights=[self.ALTURA_CONTEUDO],
+            )
+            conteudo_t.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, -1), self.COR_VAZIO),
-                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-                ('BOX', (0, 0), (-1, -1), 0.5, self.COR_BORDA),
+                ('ALIGN',      (0, 0), (-1, -1), 'CENTER'),
+                ('VALIGN',     (0, 0), (-1, -1), 'MIDDLE'),
+                ('BOX',        (0, 0), (-1, -1), 0.5, self.COR_BORDA),
             ]))
         else:
+            total = sum(s['quantidade'] for s in segmentos)
+            larg_util = largura - 1 * mm
             celulas = []
             larguras = []
-            
-            total_lugares = sum(seg['quantidade'] for seg in segmentos)
-            largura_disponivel = largura - 2*mm
-            
+
             for seg in segmentos:
-                curso = seg['curso']
-                inicio = seg['inicio']
-                fim = seg['fim']
-                qtd = seg['quantidade']
-                
-                larg_seg = (qtd / total_lugares) * largura_disponivel
+                larg_seg = (seg['quantidade'] / total) * larg_util
                 larguras.append(larg_seg)
-                
-                cor = cores_cursos.get(curso, self.COR_VAZIO)
-                
-                if curso == 'VAZIO':
-                    if inicio == fim:
-                        texto = f'<para align="center"><font size="6" color="#6b7280">{inicio}</font></para>'
-                    else:
-                        texto = f'<para align="center"><font size="6" color="#6b7280">{inicio}-{fim}</font></para>'
-                else:
-                    sigla = seg.get('abreviacao', curso[:3].upper())
-                    
-                    # ✨ MELHORADO: Ajusta tamanho com margem de segurança
-                    tamanho_fonte = self._ajustar_tamanho_fonte(sigla, larg_seg / mm)
-                    tamanho_range = max(4, tamanho_fonte - 1)
-                    
-                    # Leading adequado baseado no tamanho da fonte
-                    leading_total = (tamanho_fonte + tamanho_range) + 2
-                    
-                    # ✨ NOVO: Padding horizontal para evitar cortes nas bordas
-                    padding_horizontal = max(2, int(larg_seg / mm * 0.08))  # 8% de padding
-                    
-                    # ✨✨ CORRIGIDO: Lógica inteligente para exibição do range
-                    # SEMPRE mostra a QUANTIDADE de lugares, nunca o número do assento
-                    # Se assento único: mostra só o número (quantidade = 1)
-                    # Se pequeno (até 4 lugares): mostra só a quantidade
-                    # Se grande (5+ lugares): mostra "X lugares"
-                    if inicio == fim:
-                        range_texto = str(qtd)  # Quantidade = 1
-                    else:
-                        if qtd <= 4:
-                            # Mostra a QUANTIDADE (não o último assento)
-                            range_texto = str(qtd)
-                        else:
-                            # Para 5+ lugares, mostra "X lugares"
-                            range_texto = f"{qtd} lugares"
-                    
-                    texto = f'<para align="center" leftIndent="{padding_horizontal}" rightIndent="{padding_horizontal}" leading="{leading_total}"><font size="{tamanho_fonte}" color="white"><b>{sigla}</b></font><br/><font size="{tamanho_range}" color="white">{range_texto}</font></para>'
-                
-                celula = Paragraph(texto, self.styles['Normal'])
-                celulas.append((celula, cor))
-            
-            linha_celulas = [[c[0] for c in celulas]]
-            
-            conteudo_table = Table(linha_celulas, colWidths=larguras, rowHeights=[self.ALTURA_CONTEUDO_FILA])
-            
+                larg_mm  = larg_seg / mm
+                html = self._texto_segmento(seg, larg_mm)
+                cor  = (cores.get(seg['curso'], self.COR_VAZIO)
+                        if seg['curso'] != 'VAZIO' else self.COR_VAZIO)
+                celulas.append((Paragraph(html, self.styles['Normal']), cor))
+
+            conteudo_t = Table(
+                [[c[0] for c in celulas]],
+                colWidths=larguras, rowHeights=[self.ALTURA_CONTEUDO],
+            )
             estilo = [
-                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-                # ✨ PADDING AUMENTADO: mais espaço para o texto
-                ('LEFTPADDING', (0, 0), (-1, -1), 2),
-                ('RIGHTPADDING', (0, 0), (-1, -1), 2),
-                ('TOPPADDING', (0, 0), (-1, -1), 1),
+                ('ALIGN',         (0, 0), (-1, -1), 'CENTER'),
+                ('VALIGN',        (0, 0), (-1, -1), 'MIDDLE'),
+                ('LEFTPADDING',   (0, 0), (-1, -1), 1),
+                ('RIGHTPADDING',  (0, 0), (-1, -1), 1),
+                ('TOPPADDING',    (0, 0), (-1, -1), 1),
                 ('BOTTOMPADDING', (0, 0), (-1, -1), 1),
             ]
-            
             for i, (_, cor) in enumerate(celulas):
                 estilo.append(('BACKGROUND', (i, 0), (i, 0), cor))
-                estilo.append(('BOX', (i, 0), (i, 0), 0.3, colors.white))
-            
-            conteudo_table.setStyle(TableStyle(estilo))
-        
-        header_table = Table(header, colWidths=[largura - 2*mm], rowHeights=[self.ALTURA_HEADER_FILA])
-        header_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, -1), self.COR_HEADER),
-            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('BOX', (0, 0), (-1, -1), 0.3, self.COR_BORDA),
-        ]))
-        
-        container = Table([[header_table], [conteudo_table]], colWidths=[largura - 2*mm])
+                estilo.append(('BOX',        (i, 0), (i, 0), 0.3, colors.white))
+            conteudo_t.setStyle(TableStyle(estilo))
+
+        container = Table([[header_t], [conteudo_t]], colWidths=[largura - 1 * mm])
         container.setStyle(TableStyle([
-            ('BOX', (0, 0), (-1, -1), 0.8, self.COR_BORDA),
-            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-            ('LEFTPADDING', (0, 0), (-1, -1), 0.5),
-            ('RIGHTPADDING', (0, 0), (-1, -1), 0.5),
-            ('TOPPADDING', (0, 0), (-1, -1), 0),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 0.5),
+            ('BOX',           (0, 0), (-1, -1), 0.6, self.COR_BORDA),
+            ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
+            ('LEFTPADDING',   (0, 0), (-1, -1), 0.3),
+            ('RIGHTPADDING',  (0, 0), (-1, -1), 0.3),
+            ('TOPPADDING',    (0, 0), (-1, -1), 0),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 0.3),
         ]))
-        
         return container
-    
+
+    # ------------------------------------------------------------------ #
+    # Legenda — fonte grande, sem transbordar
+    # ------------------------------------------------------------------ #
+
     def _criar_legenda(self, detalhes: List[Dict]) -> Table:
-        """Legenda compacta"""
-        itens = []
-        
-        for idx, d in enumerate(detalhes):
-            cor = self.CORES_CURSOS[idx % len(self.CORES_CURSOS)]
-            
-            quad = Table([['']], colWidths=[5*mm], rowHeights=[3*mm])
-            quad.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, -1), cor),
-            ]))
-            
-            texto = f"{d['curso']}: {d['total_assentos']}"
-            itens.extend([quad, texto])
-        
-        linhas = []
-        for i in range(0, len(itens), 6):
-            linha = itens[i:i+6]
-            while len(linha) < 6:
-                linha.append('')
-            linhas.append(linha)
-        
-        if not linhas:
+        """
+        Legenda em grade de 2 colunas.
+
+        Layout de cada célula (dentro da mesma célula da Table, sem tabela aninhada):
+          ■ NOME DO CURSO
+            999 assentos
+
+        O quadrado de cor é simulado como background da célula de "cor" em
+        uma tabela de 2 colunas fixas por item: [cor_col | texto_col].
+        Toda a lógica vive numa Table simples, sem aninhamento, para evitar
+        overflow e garantir que o Reportlab consegue medir corretamente.
+        """
+        COLS   = 2                           # pares por linha da grade
+        PAD_H  = 5 * mm                      # padding horizontal por célula
+        PAD_V  = 4 * mm                      # padding vertical por célula
+        COR_W  = 10 * mm                     # largura da coluna do quadrado de cor
+        GAP    = 3 * mm                      # gap entre quadrado e texto
+        LINHA_H = 16 * mm                    # altura fixa de cada linha da legenda
+
+        # Largura disponível por "par" (coluna da grade)
+        larg_par   = self.LARGURA_UTIL / COLS
+        # Largura disponível para o texto dentro de um par
+        texto_w    = larg_par - COR_W - GAP - 2 * PAD_H
+
+        # Estilo de texto seguro — fonte grande e bold para o nome
+        # Usa 11pt fixo; se o nome for muito longo, o Reportlab quebra linha
+        # automaticamente dentro de texto_w (sem overflow horizontal)
+        estilo_nome = ParagraphStyle(
+            'LegNome', parent=self.styles['Normal'],
+            fontName='Helvetica-Bold', fontSize=11, leading=13,
+            textColor=colors.HexColor('#111827'),
+        )
+        estilo_qtd = ParagraphStyle(
+            'LegQtd', parent=self.styles['Normal'],
+            fontName='Helvetica', fontSize=9, leading=11,
+            textColor=colors.HexColor('#6b7280'),
+        )
+
+        # Monta linhas de forma que cada "linha da grade" vira 1 linha de Table
+        # com COLS*2 colunas: [cor₁, txt₁, cor₂, txt₂]
+        larguras_cols = []
+        for _ in range(COLS):
+            larguras_cols += [COR_W, larg_par - COR_W]   # par: quadrado | texto
+
+        linhas_dados  = []
+        linhas_estilos: list = []
+
+        def celula_texto(d, idx):
+            """Retorna o Paragraph de texto para um item."""
+            nome = d['curso']
+            qtd  = d['total_assentos']
+            # Stack nome + quantidade em VKeepTogether via \n (Paragraph cuida da quebra)
+            from reportlab.platypus import KeepTogether
+            return [
+                Paragraph(nome, estilo_nome),
+                Paragraph(f"{qtd} assentos", estilo_qtd),
+            ]
+
+        # Agrupa detalhes em pares
+        for row_i in range(0, len(detalhes), COLS):
+            par = detalhes[row_i: row_i + COLS]
+            celulas_cor  = []
+            celulas_txt  = []
+
+            for col_j, d in enumerate(par):
+                idx = row_i + col_j
+                cor = self.CORES_CURSOS[idx % len(self.CORES_CURSOS)]
+
+                celulas_cor.append('')    # conteúdo vazio; cor vem do TableStyle
+                # Texto: nome em bold grande + quantidade
+                nome = d['curso']
+                qtd  = d['total_assentos']
+                html = (
+                    f'<b><font size="11" color="#111827">{nome}</font></b><br/>'
+                    f'<font size="9" color="#6b7280">{qtd} assentos</font>'
+                )
+                celulas_txt.append(Paragraph(html, self.styles['Normal']))
+
+                # Guarda cor para aplicar no TableStyle depois
+                linhas_estilos.append((row_i // COLS, col_j * 2, cor))
+
+            # Preenche colunas vazias se o par for incompleto
+            while len(par) < COLS:
+                celulas_cor.append('')
+                celulas_txt.append('')
+                par.append(None)
+
+            # Intercala: [cor0, txt0, cor1, txt1]
+            linha_cells = []
+            for c, t in zip(celulas_cor, celulas_txt):
+                linha_cells += [c, t]
+            linhas_dados.append(linha_cells)
+
+        if not linhas_dados:
             return None
-        
-        t = Table(linhas, colWidths=[5*mm, 52*mm, 5*mm, 52*mm, 5*mm, 52*mm])
-        t.setStyle(TableStyle([
-            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('FONTSIZE', (0, 0), (-1, -1), 8),
-            ('FONTNAME', (1, 0), (-1, -1), 'Helvetica-Bold'),
-            ('LEFTPADDING', (0, 0), (-1, -1), 0.5),
-            ('RIGHTPADDING', (0, 0), (-1, -1), 4),
-        ]))
-        
+
+        t = Table(linhas_dados, colWidths=larguras_cols, rowHeights=LINHA_H)
+
+        style_cmds = [
+            ('VALIGN',        (0, 0), (-1, -1), 'MIDDLE'),
+            # Padding nas colunas de texto (índices ímpares)
+            ('LEFTPADDING',   (0, 0), (-1, -1), 0),
+            ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
+            ('TOPPADDING',    (0, 0), (-1, -1), PAD_V),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), PAD_V),
+            # Padding extra no texto
+            ('LEFTPADDING',   (1, 0), (1, -1), GAP),
+            ('LEFTPADDING',   (3, 0), (3, -1), GAP),
+            # Grade suave
+            ('GRID',          (0, 0), (-1, -1), 0.3, colors.HexColor('#e5e7eb')),
+            # Linhas zebradas por par de colunas (aplica à linha inteira)
+        ]
+
+        # Cores das células de "quadrado"
+        for (ri, ci_par, cor) in linhas_estilos:
+            col_idx = ci_par  # já é o índice par (0, 2, 4...)
+            style_cmds.append(('BACKGROUND', (col_idx, ri), (col_idx, ri), cor))
+            # Linhas pares com fundo levemente cinza no texto
+            bg_txt = colors.white if ri % 2 == 0 else colors.HexColor('#f9fafb')
+            style_cmds.append(('BACKGROUND', (col_idx + 1, ri), (col_idx + 1, ri), bg_txt))
+
+        t.setStyle(TableStyle(style_cmds))
         return t
-    
-    def _criar_corredor(self) -> Table:
-        """Cria elemento visual de corredor"""
-        corredor_html = '<para align="center"><font size="9" color="white"><b>═══ CORREDOR ═══</b></font></para>'
-        corredor = Table([[Paragraph(corredor_html, self.styles['Normal'])]], colWidths=[self.LARGURA_UTIL])
-        corredor.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, -1), self.COR_CORREDOR),
-            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('TOPPADDING', (0, 0), (-1, -1), 3),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
-        ]))
-        return corredor
-    
+
+    # ------------------------------------------------------------------ #
+    # Geração final do PDF
+    # ------------------------------------------------------------------ #
+
     def gerar_pdf(
         self,
         nome_formatura: str,
@@ -442,125 +425,116 @@ class PDFMapaAssentosBancos:
         data_formatura: str,
         detalhes: List[Dict],
         assentos_vazios: List[Dict],
-        rotacao_graus: int = 0
     ) -> BytesIO:
-        """Gera PDF SUPER OTIMIZADO com 3 páginas"""
-        
+
         doc = SimpleDocTemplate(
-            self.buffer,
-            pagesize=self.pagesize,
-            rightMargin=self.MARGEM,
-            leftMargin=self.MARGEM,
-            topMargin=self.MARGEM,
-            bottomMargin=self.MARGEM
+            self.buffer, pagesize=self.pagesize,
+            rightMargin=self.MARGEM, leftMargin=self.MARGEM,
+            topMargin=self.MARGEM,   bottomMargin=self.MARGEM,
         )
-        
         story = []
-        
-        # ========== PÁGINA 1: LEGENDA ==========
-        
-        titulo = Paragraph(nome_formatura, self.styles['Titulo'])
-        story.append(titulo)
-        
-        subtitulo = Paragraph(
+
+        # ── Página 1: Legenda ──────────────────────────────────────────
+        story.append(Paragraph(nome_formatura, self.styles['Titulo']))
+        story.append(Paragraph(
             f"Local: {local} &nbsp;•&nbsp; Data: {data_formatura}",
-            self.styles['Subtitulo']
-        )
-        story.append(subtitulo)
-        story.append(Spacer(1, 6*mm))
-        
+            self.styles['Subtitulo'],
+        ))
+        story.append(Spacer(1, 8 * mm))
+
         legenda = self._criar_legenda(detalhes)
         if legenda:
             story.append(legenda)
-        
+
         story.append(PageBreak())
-        
-        # ========== PREPARAÇÃO ==========
-        
-        cores = {}
-        for idx, d in enumerate(detalhes):
-            cores[d['curso']] = self.CORES_CURSOS[idx % len(self.CORES_CURSOS)]
-        
-        linhas = self._agrupar_filas_por_linha(detalhes, assentos_vazios)
-        linhas_ordenadas = sorted(linhas.keys())
-        
-        linhas_antes_corredor = [l for l in linhas_ordenadas if l <= 12]
-        linhas_depois_corredor = [l for l in linhas_ordenadas if l > 12]
-        
-        # ========== PÁGINA 2: ANTES DO CORREDOR ==========
-        
-        palco_html = '<para align="center"><font size="11" color="white"><b>🎭 P A L C O 🎭</b></font></para>'
-        palco = Table([[Paragraph(palco_html, self.styles['Normal'])]], colWidths=[self.LARGURA_UTIL])
+
+        # ── Preparação ────────────────────────────────────────────────
+        cores = {
+            d['curso']: self.CORES_CURSOS[i % len(self.CORES_CURSOS)]
+            for i, d in enumerate(detalhes)
+        }
+        linhas_todas   = self._agrupar_por_linha(detalhes, assentos_vazios)
+        nums_ordenados = sorted(linhas_todas)
+        antes_corr = [n for n in nums_ordenados if n <= 12]
+        depois_corr = [n for n in nums_ordenados if n > 12]
+
+        # ── Página 2: Antes do corredor ───────────────────────────────
+        palco_html = (
+            '<para align="center">'
+            '<font size="11" color="white"><b>🎭 P A L C O 🎭</b></font>'
+            '</para>'
+        )
+        palco = Table(
+            [[Paragraph(palco_html, self.styles['Normal'])]],
+            colWidths=[self.LARGURA_UTIL],
+        )
         palco.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, -1), self.COR_PALCO),
-            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('TOPPADDING', (0, 0), (-1, -1), 4),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+            ('ALIGN',      (0, 0), (-1, -1), 'CENTER'),
+            ('VALIGN',     (0, 0), (-1, -1), 'MIDDLE'),
+            ('TOPPADDING',    (0, 0), (-1, -1), 5),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
         ]))
         story.append(palco)
-        story.append(Spacer(1, 2*mm))
-        
-        for num_linha in linhas_antes_corredor:
-            filas_linha = linhas[num_linha]
-            num_filas = len(filas_linha)
-            largura_fila = self.LARGURA_UTIL / num_filas
-            
-            bancos_visuais = []
-            for fila in filas_linha:
-                banco = self._criar_banco_visual(fila, cores, largura_fila, 0)
-                bancos_visuais.append(banco)
-            
-            linha_table = Table([bancos_visuais], colWidths=[largura_fila] * num_filas)
-            linha_table.setStyle(TableStyle([
-                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-                ('LEFTPADDING', (0, 0), (-1, -1), 0.3),
-                ('RIGHTPADDING', (0, 0), (-1, -1), 0.3),
+        story.append(Spacer(1, 2 * mm))
+
+        for num in antes_corr:
+            filas_linha = linhas_todas[num]
+            n = len(filas_linha)
+            larg = self.LARGURA_UTIL / n
+            bancos = [self._criar_banco(f, cores, larg) for f in filas_linha]
+            t = Table([bancos], colWidths=[larg] * n)
+            t.setStyle(TableStyle([
+                ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
+                ('LEFTPADDING',   (0, 0), (-1, -1), 0.3),
+                ('RIGHTPADDING',  (0, 0), (-1, -1), 0.3),
             ]))
-            
-            story.append(linha_table)
-            story.append(Spacer(1, 1.5*mm))
-        
-        # ========== PÁGINA 3: DEPOIS DO CORREDOR ==========
-        
-        if linhas_depois_corredor:
+            story.append(t)
+            story.append(Spacer(1, 1.2 * mm))
+
+        # ── Página 3: Depois do corredor ──────────────────────────────
+        if depois_corr:
             story.append(PageBreak())
-            
-            story.append(self._criar_corredor())
-            story.append(Spacer(1, 2*mm))
-            
-            for num_linha in linhas_depois_corredor:
-                filas_linha = linhas[num_linha]
-                num_filas = len(filas_linha)
-                largura_fila = self.LARGURA_UTIL / num_filas
-                
-                rotacao_fila = 180 if rotacao_graus == 180 else 0
-                
-                bancos_visuais = []
-                for fila in filas_linha:
-                    banco = self._criar_banco_visual(fila, cores, largura_fila, rotacao_fila)
-                    bancos_visuais.append(banco)
-                
-                if rotacao_fila == 180:
-                    bancos_visuais = list(reversed(bancos_visuais))
-                
-                linha_table = Table([bancos_visuais], colWidths=[largura_fila] * num_filas)
-                linha_table.setStyle(TableStyle([
-                    ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-                    ('LEFTPADDING', (0, 0), (-1, -1), 0.3),
-                    ('RIGHTPADDING', (0, 0), (-1, -1), 0.3),
+
+            corredor_html = (
+                '<para align="center">'
+                '<font size="9" color="white"><b>═══ CORREDOR ═══</b></font>'
+                '</para>'
+            )
+            corredor = Table(
+                [[Paragraph(corredor_html, self.styles['Normal'])]],
+                colWidths=[self.LARGURA_UTIL],
+            )
+            corredor.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, -1), self.COR_CORREDOR),
+                ('ALIGN',      (0, 0), (-1, -1), 'CENTER'),
+                ('VALIGN',     (0, 0), (-1, -1), 'MIDDLE'),
+                ('TOPPADDING',    (0, 0), (-1, -1), 3),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+            ]))
+            story.append(corredor)
+            story.append(Spacer(1, 2 * mm))
+
+            for num in depois_corr:
+                filas_linha = linhas_todas[num]
+                n = len(filas_linha)
+                larg = self.LARGURA_UTIL / n
+                bancos = [self._criar_banco(f, cores, larg) for f in filas_linha]
+                t = Table([bancos], colWidths=[larg] * n)
+                t.setStyle(TableStyle([
+                    ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
+                    ('LEFTPADDING',   (0, 0), (-1, -1), 0.3),
+                    ('RIGHTPADDING',  (0, 0), (-1, -1), 0.3),
                 ]))
-                
-                story.append(linha_table)
-                story.append(Spacer(1, 1.5*mm))
-        
+                story.append(t)
+                story.append(Spacer(1, 1.2 * mm))
+
         doc.build(story)
         self.buffer.seek(0)
         return self.buffer
 
 
 def gerar_pdf_mapa_assentos(dados: Dict[str, Any], rotacao_graus: int = 0) -> BytesIO:
-    """Função principal"""
     gerador = PDFMapaAssentosBancos()
     return gerador.gerar_pdf(
         nome_formatura=dados['nome_formatura'],
@@ -568,5 +542,4 @@ def gerar_pdf_mapa_assentos(dados: Dict[str, Any], rotacao_graus: int = 0) -> By
         data_formatura=dados['data_formatura'],
         detalhes=dados['detalhes'],
         assentos_vazios=dados.get('assentos_vazios', []),
-        rotacao_graus=rotacao_graus
     )

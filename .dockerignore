@@ -1,0 +1,38 @@
+# Ambientes virtuais Python
+venv/
+env/
+.venv/
+ENV/
+
+# Arquivos Python compilados
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Arquivos de configuração local
+.env
+.env.local
+*.log
+
+# Git
+.git/
+.gitignore
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Documentação
+*.md
+README.md
+
+# Arquivos temporários
+*.tmp
+.DS_Store
+
+# Arquivos de teste
+tests/
+.pytest_cache/

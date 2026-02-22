@@ -35,7 +35,7 @@ CURSOS_SIGLAS = {
     "SISTEMAS E MÍDIAS DIGITAIS": "S.M.D",
     "ADMINISTRAÇÃO PÚBLICA": "ADM. P",
     "FÍSICA": "FIS",
-    "LETRAS": "LETR",
+    "LETRAS": "LETRAS",
     "MATEMÁTICA": "MAT",
     "QUÍMICA": "QUIM",
 
