@@ -39,21 +39,32 @@ def _calcular_assentos_vazios(local, alocacao):
     return assentos_vazios
 
 
-def _resumo_detalhado(alocacao):
-    resumo = []
-    for curso_id in alocacao.get_cursos_alocados():
+def _resumo_detalhado(alocacao, formatura):
+    """
+    Retorna os detalhes dos cursos NA MESMA ORDEM em que aparecem
+    em formatura.cursos (= ordem da planilha / última reordenação).
+    Isso garante que legenda e mapa sempre coincidem.
+    """
+    resumo_por_curso = alocacao.get_resumo_por_curso()
+    resultado = []
+
+    for curso_formatura in formatura.cursos:
+        curso_id = curso_formatura.curso_id
+        if curso_id not in resumo_por_curso:
+            continue
         curso = Curso.get_by_id(curso_id)
         if not curso:
             continue
-        info = alocacao.get_resumo_por_curso()[curso_id]
-        resumo.append({
+        info = resumo_por_curso[curso_id]
+        resultado.append({
             "curso": curso.nome,
             "curso_id": curso_id,
             "abreviacao": curso.abreviacao if curso.abreviacao else curso.nome[:3].upper(),
             "total_assentos": info["total_assentos"],
             "filas": info["detalhes_filas"],
         })
-    return resumo
+
+    return resultado
 
 
 def _ordenar_filas(filas_dict):
@@ -63,12 +74,12 @@ def _ordenar_filas(filas_dict):
     return sorted(filas_dict.keys(), key=chave)
 
 
-def _payload_alocacao(alocacao, local):
+def _payload_alocacao(alocacao, local, formatura):
     return {
         "id": str(alocacao.id),
         "total_alocado": alocacao.total_assentos_alocados,
         "taxa_ocupacao": f"{round(alocacao.taxa_ocupacao, 2)}%",
-        "detalhes": _resumo_detalhado(alocacao),
+        "detalhes": _resumo_detalhado(alocacao, formatura),
         "assentos_vazios": _calcular_assentos_vazios(local, alocacao),
     }
 
@@ -95,13 +106,12 @@ def get_alocacao(formatura_id):
             "data": formatura.data.isoformat(),
             "local": formatura.local.nome,
         },
-        "alocacao": _payload_alocacao(alocacao, formatura.local),
+        "alocacao": _payload_alocacao(alocacao, formatura.local, formatura),
     }), 200
 
 
 # ---------------------------------------------------------------------------
 # PUT /api/alocacao/<formatura_id>/reordenar
-# Recebe nova ordem de curso_ids e roda o algoritmo do zero com essa ordem
 # ---------------------------------------------------------------------------
 
 @alocacao_bp.route("/<formatura_id>/reordenar", methods=["PUT"])
@@ -111,6 +121,8 @@ def reordenar(formatura_id):
     {
         "ordem": ["curso_id_1", "curso_id_2", ...]   // nova ordem desejada
     }
+    A nova ordem é salva em formatura.cursos para que futuras chamadas
+    ao GET também retornem os detalhes nessa ordem.
     """
     try:
         formatura = Formatura.objects.get(id=formatura_id, ativo=True)
@@ -125,25 +137,22 @@ def reordenar(formatura_id):
     if not isinstance(nova_ordem, list) or not nova_ordem:
         return jsonify({"error": "'ordem' deve ser uma lista não vazia"}), 400
 
-    # Valida que os IDs batem com os cursos da formatura
     ids_formatura = {c.curso_id for c in formatura.cursos}
     if set(nova_ordem) != ids_formatura:
         return jsonify({"error": "A lista de IDs não corresponde aos cursos desta formatura"}), 400
 
-    # Reordena os cursos da formatura na ordem recebida
+    # Reordena os cursos e SALVA na formatura para persistir a ordem
     cursos_map = {c.curso_id: c for c in formatura.cursos}
     formatura.cursos = [cursos_map[cid] for cid in nova_ordem]
-    # Não salva a formatura — a ordem é só para o algoritmo
+    formatura.save()  # persiste a nova ordem
 
-    # Deleta alocação existente e gera nova
+    # Deleta alocação existente e gera nova com a nova ordem
     Alocacao.objects(formatura=formatura).delete()
 
     try:
         nova_alocacao = gerar_alocacao_vertical_corrigida(formatura)
         nova_alocacao.save()
     except ValidationError as e:
-        # Restaura alocação anterior se der erro (recria do zero não é possível aqui,
-        # então apenas retorna erro — alocação anterior já foi deletada)
         return jsonify({"error": str(e)}), 400
     except Exception as e:
         import traceback; traceback.print_exc()
@@ -151,7 +160,7 @@ def reordenar(formatura_id):
 
     return jsonify({
         "success": True,
-        "alocacao": _payload_alocacao(nova_alocacao, formatura.local),
+        "alocacao": _payload_alocacao(nova_alocacao, formatura.local, formatura),
     }), 200
 
 
@@ -304,5 +313,5 @@ def mover_curso(formatura_id):
 
     return jsonify({
         "success": True,
-        "alocacao": _payload_alocacao(alocacao, formatura.local),
+        "alocacao": _payload_alocacao(alocacao, formatura.local, formatura),
     }), 200
