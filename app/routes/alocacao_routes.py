@@ -204,6 +204,8 @@ def _mover_e_empurrar(alocacao, formatura, curso_id_alvo, fila_destino, assento_
 
     cursos_para_empurrar = []
     for fi, fila in enumerate(filas_ordenadas):
+        if fi < idx_dest:
+            continue
         cap = capacidades[fila]
         inicio = assento_destino if fi == idx_dest else 1
         for num in range(inicio, cap + 1):
@@ -212,6 +214,8 @@ def _mover_e_empurrar(alocacao, formatura, curso_id_alvo, fila_destino, assento_
                 cursos_para_empurrar.append(c)
 
     for fi, fila in enumerate(filas_ordenadas):
+        if fi < idx_dest:
+            continue
         cap = capacidades[fila]
         inicio = assento_destino if fi == idx_dest else 1
         for num in range(inicio, cap + 1):
