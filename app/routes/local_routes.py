@@ -1,5 +1,5 @@
 from flask import Blueprint, jsonify, request
-from mongoengine import ValidationError
+from mongoengine import ValidationError, NotUniqueError
 
 from app.models.local import Local
 
@@ -53,6 +53,52 @@ def criar_local():
         return jsonify({"error": str(e)}), 400
     except Exception as e:
         return jsonify({"error": f"Erro ao criar local: {str(e)}"}), 500
+
+
+@local_bp.route("/atualizar_local/<local_id>", methods=["PUT"])
+def atualizar_local(local_id):
+    try:
+        data = request.get_json()
+
+        if not data:
+            return jsonify({"error": "Dados não fornecidos"}), 400
+
+        local = Local.objects(id=local_id, ativo=True).first()
+
+        if not local:
+            return jsonify({"error": "Local não encontrado"}), 404
+
+        if not data.get("nome"):
+            return jsonify({"error": "Nome é obrigatório"}), 400
+
+        if not data.get("filas") or len(data.get("filas", [])) == 0:
+            return jsonify({"error": "Pelo menos uma fila deve ser fornecida"}), 400
+
+        local.nome = data["nome"]
+        local.descricao = data.get("descricao", "")
+
+        # Substitui as filas existentes pelas novas
+        local.filas = []
+        for fila_data in data["filas"]:
+            local.adicionar_fila(
+                nome=fila_data["nome"],
+                quantidade_assentos=fila_data["quantidade_assentos"],
+                ordem=fila_data.get("ordem")
+            )
+
+        local.save()
+
+        return jsonify({
+            "message": "Local atualizado com sucesso",
+            "local": local.to_dict()
+        }), 200
+
+    except ValidationError as e:
+        return jsonify({"error": str(e)}), 400
+    except NotUniqueError:
+        return jsonify({"error": "Já existe um local ativo com esse nome"}), 400
+    except Exception as e:
+        return jsonify({"error": f"Erro ao atualizar local: {str(e)}"}), 500
 
 
 @local_bp.route("/buscar_local/<local_id>", methods=["GET"])

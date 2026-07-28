@@ -1,7 +1,7 @@
 from flask import Blueprint, request, jsonify
 from werkzeug.utils import secure_filename
 from bson import ObjectId
-from mongoengine.errors import DoesNotExist, ValidationError
+from mongoengine.errors import DoesNotExist, ValidationError, NotUniqueError
 from datetime import datetime
 import os
 
@@ -103,13 +103,27 @@ def processar_planilha():
 
         for curso_data in dados_planilha['cursos']:
             nome_curso = curso_data['nome']
+            sigla = curso_data.get('sigla')
             curso = Curso.buscar_por_nome(nome_curso)
 
             if not curso:
                 curso = Curso(nome=nome_curso)
-                curso.save()
+                if sigla:
+                    curso.abreviacao = sigla
+                try:
+                    curso.save()
+                except (ValidationError, NotUniqueError):
+                    # Sigla inválida ou já usada por outro curso: cria sem abreviação
+                    curso.abreviacao = None
+                    curso.save()
                 cursos_criados.append(nome_curso)
             else:
+                if sigla and curso.abreviacao != sigla:
+                    try:
+                        curso.abreviacao = sigla
+                        curso.save()
+                    except (ValidationError, NotUniqueError):
+                        pass
                 cursos_existentes.append(nome_curso)
 
             curso_data['curso_id'] = str(curso.id)

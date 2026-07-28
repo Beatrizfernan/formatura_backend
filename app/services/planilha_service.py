@@ -60,17 +60,18 @@ class PlanilhaService:
         """
         Formato esperado:
         Linha 0: "26/08/2025 - FAMED; FFOE; ICA"
-        Linha 1: Headers (Unidade | Curso | QTD | EFETIVO)
+        Linha 1: Headers (posições de Curso/QTD/SIGLA variam conforme o modelo da planilha)
         Linha 2+: Dados
         """
         if not dados or len(dados) < 3:
             raise ValueError('Planilha não contém dados suficientes')
-        
+
         primeira_linha = dados[0][0] if dados[0] and len(dados[0]) > 0 else ""
         nome_formatura, data_formatura = PlanilhaService._extrair_nome_data(primeira_linha)
-        
-        cursos = PlanilhaService._processar_cursos(dados[2:])
-        
+
+        colunas = PlanilhaService._mapear_colunas(dados[1])
+        cursos = PlanilhaService._processar_cursos(dados[2:], colunas)
+
         return {
             'nome_formatura': nome_formatura,
             'data': data_formatura,
@@ -114,31 +115,62 @@ class PlanilhaService:
         return f"Formatura {nome_unidades}", data_formatura
     
     @staticmethod
-    def _processar_cursos(linhas: List[List[str]]) -> List[Dict]:
+    def _mapear_colunas(header: List[str]) -> Dict[str, int]:
         """
-        Processa: [Unidade, Curso, QTD, EFETIVO]
+        Descobre em quais colunas estão Curso, QTD e (opcionalmente) SIGLA
+        a partir dos textos do cabeçalho, já que planilhas diferentes trocam
+        a ordem/quantidade de colunas (ex: modelos com coluna SIGLA inserida
+        antes do QTD). Cai para as posições clássicas (1=Curso, 2=QTD) quando
+        o cabeçalho não é reconhecido, para manter compatibilidade com
+        planilhas antigas.
+        """
+        colunas = {'curso': 1, 'qtd': 2, 'sigla': None}
+
+        for idx, valor in enumerate(header or []):
+            texto = str(valor).strip().upper()
+            if texto == 'CURSO':
+                colunas['curso'] = idx
+            elif texto == 'QTD':
+                colunas['qtd'] = idx
+            elif texto == 'SIGLA':
+                colunas['sigla'] = idx
+
+        return colunas
+
+    @staticmethod
+    def _processar_cursos(linhas: List[List[str]], colunas: Dict[str, int]) -> List[Dict]:
+        """
+        Processa as linhas de dados usando as colunas mapeadas em _mapear_colunas.
         """
         cursos = []
-        
+        col_curso = colunas['curso']
+        col_qtd = colunas['qtd']
+        col_sigla = colunas.get('sigla')
+
         for row in linhas:
-            if not row or len(row) < 3:
+            if not row or len(row) <= max(col_curso, col_qtd):
                 continue
-            
-            curso_nome = row[1].strip() if len(row) > 1 and row[1] else ""
-            qtd_str = row[2].strip() if len(row) > 2 and row[2] else "0"
-            
+
+            curso_nome = row[col_curso].strip() if row[col_curso] else ""
+            qtd_str = row[col_qtd].strip() if row[col_qtd] else "0"
+
             if not curso_nome or curso_nome.upper().startswith('TOTAL'):
                 continue
-            
+
             try:
                 qtd_formandos = int(float(qtd_str))  # Converte para float depois int (caso seja "10.0")
             except (ValueError, TypeError):
                 continue
-            
+
             if qtd_formandos > 0:
-                cursos.append({
+                curso_dict = {
                     'nome': curso_nome.upper().strip(),
                     'qtd_formandos': qtd_formandos
-                })
-        
+                }
+
+                if col_sigla is not None and col_sigla < len(row) and row[col_sigla]:
+                    curso_dict['sigla'] = row[col_sigla].strip()
+
+                cursos.append(curso_dict)
+
         return cursos
