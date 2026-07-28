@@ -2,7 +2,7 @@
 Rotas de alocação:
   GET  /api/alocacao/<formatura_id>                → carrega alocação atual
   PUT  /api/alocacao/<formatura_id>/reordenar      → recebe nova ordem dos cursos, realoca do zero
-  PUT  /api/alocacao/<formatura_id>/mover-curso    → move um trecho específico de um curso (não o curso inteiro) e empurra em cascata a partir do destino
+  PUT  /api/alocacao/<formatura_id>/mover-curso    → move um bloco contíguo de um curso (um ou mais trechos) pra um destino, empurrando em cascata só a partir dali
 """
 
 import re
@@ -168,26 +168,27 @@ def reordenar(formatura_id):
 # PUT /api/alocacao/<formatura_id>/mover-curso
 # ---------------------------------------------------------------------------
 
-def _mover_e_empurrar(alocacao, formatura, curso_id_alvo, fila_origem, assento_inicio_origem,
-                       assento_fim_origem, fila_destino, assento_destino):
+def _mover_e_empurrar(alocacao, formatura, curso_id_alvo, origem_segmentos, fila_destino, assento_destino):
     """
-    Move APENAS o trecho específico (fila_origem, assento_inicio_origem..assento_fim_origem)
-    do curso_id_alvo para (fila_destino, assento_destino), empurrando em cascata só o que
-    estiver a partir do destino. Outros trechos do mesmo curso em outras filas não são tocados.
+    Move um ou mais trechos de origem (normalmente o "bloco contíguo" de um curso que se
+    espalhou por várias filas seguidas) para (fila_destino, assento_destino), empurrando em
+    cascata — só a partir do destino em diante — o que estiver no caminho.
+
+    origem_segmentos: lista de dicts {"fila": str, "inicio": int, "fim": int}.
+
+    Filas antes do destino, e qualquer trecho do mesmo curso que NÃO esteja em
+    origem_segmentos, não são tocados.
     """
     local = formatura.local
     capacidades = {f.nome: f.quantidade_assentos for f in local.filas_ordenadas}
     filas_ordenadas = _ordenar_filas(capacidades)
 
-    if fila_origem not in capacidades:
-        raise ValidationError(f"Fila '{fila_origem}' não existe neste local.")
+    if not origem_segmentos:
+        raise ValidationError("Nenhum trecho de origem informado.")
     if fila_destino not in capacidades:
         raise ValidationError(f"Fila '{fila_destino}' não existe neste local.")
     if assento_destino < 1 or assento_destino > capacidades[fila_destino]:
         raise ValidationError(f"Assento {assento_destino} inválido para fila '{fila_destino}'.")
-    if (assento_inicio_origem < 1 or assento_fim_origem < assento_inicio_origem
-            or assento_fim_origem > capacidades[fila_origem]):
-        raise ValidationError("Intervalo de assentos de origem inválido.")
 
     mapa = {f: {} for f in filas_ordenadas}
     for af in alocacao.alocacoes:
@@ -200,18 +201,31 @@ def _mover_e_empurrar(alocacao, formatura, curso_id_alvo, fila_origem, assento_i
             if i not in mapa[fila]:
                 mapa[fila][i] = "VAZIO"
 
-    # Libera exatamente o trecho de origem informado (e só ele)
-    for num in range(assento_inicio_origem, assento_fim_origem + 1):
-        if mapa[fila_origem][num] != curso_id_alvo:
-            raise ValidationError(
-                f"O assento {num} da fila '{fila_origem}' não pertence ao curso informado."
-            )
-        mapa[fila_origem][num] = "VAZIO"
+    # Valida todos os trechos de origem antes de mexer em qualquer coisa
+    for seg in origem_segmentos:
+        fila_o, ini_o, fim_o = seg["fila"], seg["inicio"], seg["fim"]
+        if fila_o not in capacidades:
+            raise ValidationError(f"Fila '{fila_o}' não existe neste local.")
+        if ini_o < 1 or fim_o < ini_o or fim_o > capacidades[fila_o]:
+            raise ValidationError(f"Intervalo de assentos inválido na fila '{fila_o}'.")
+        for num in range(ini_o, fim_o + 1):
+            if mapa[fila_o][num] != curso_id_alvo:
+                raise ValidationError(
+                    f"O assento {num} da fila '{fila_o}' não pertence ao curso informado."
+                )
 
-    total_curso_alvo = assento_fim_origem - assento_inicio_origem + 1
+    total_curso_alvo = sum(seg["fim"] - seg["inicio"] + 1 for seg in origem_segmentos)
+
+    # Libera todos os trechos de origem (e só eles)
+    for seg in origem_segmentos:
+        for num in range(seg["inicio"], seg["fim"] + 1):
+            mapa[seg["fila"]][num] = "VAZIO"
 
     idx_dest = filas_ordenadas.index(fila_destino)
 
+    # Empurra só OUTROS cursos. Qualquer outra ocorrência do próprio curso_id_alvo que
+    # esteja fora de origem_segmentos (ex: um pedaço solto em outra fila) fica congelada
+    # no lugar — nunca entra na fila de empurrar nem é limpa.
     cursos_para_empurrar = []
     for fi, fila in enumerate(filas_ordenadas):
         if fi < idx_dest:
@@ -220,7 +234,7 @@ def _mover_e_empurrar(alocacao, formatura, curso_id_alvo, fila_origem, assento_i
         inicio = assento_destino if fi == idx_dest else 1
         for num in range(inicio, cap + 1):
             c = mapa[fila][num]
-            if c != "VAZIO":
+            if c != "VAZIO" and c != curso_id_alvo:
                 cursos_para_empurrar.append(c)
 
     for fi, fila in enumerate(filas_ordenadas):
@@ -229,8 +243,13 @@ def _mover_e_empurrar(alocacao, formatura, curso_id_alvo, fila_origem, assento_i
         cap = capacidades[fila]
         inicio = assento_destino if fi == idx_dest else 1
         for num in range(inicio, cap + 1):
-            mapa[fila][num] = "VAZIO"
+            if mapa[fila][num] != curso_id_alvo:
+                mapa[fila][num] = "VAZIO"
 
+    # Coloca o bloco movido, pulando (sem contar) qualquer célula já congelada com o
+    # próprio curso_id_alvo — ela permanece exatamente como estava. Ao terminar, fi/num
+    # ficam exatamente onde pararam (não pulam pra próxima fileira à toa), pra fase
+    # seguinte (empurrar outros cursos) aproveitar o que sobrou da fileira atual.
     restantes = total_curso_alvo
     fi = idx_dest
     num = assento_destino
@@ -239,12 +258,14 @@ def _mover_e_empurrar(alocacao, formatura, curso_id_alvo, fila_origem, assento_i
             raise ValidationError("Não há espaço suficiente para alocar o curso no destino.")
         fila = filas_ordenadas[fi]
         cap = capacidades[fila]
-        while num <= cap and restantes > 0:
+        if num > cap:
+            fi += 1
+            num = 1
+            continue
+        if mapa[fila][num] != curso_id_alvo:
             mapa[fila][num] = curso_id_alvo
             restantes -= 1
-            num += 1
-        fi += 1
-        num = 1
+        num += 1
 
     for c in cursos_para_empurrar:
         placed = False
@@ -253,6 +274,9 @@ def _mover_e_empurrar(alocacao, formatura, curso_id_alvo, fila_origem, assento_i
                 raise ValidationError("Não há espaço suficiente para realocar todos os cursos.")
             fila = filas_ordenadas[fi]
             cap = capacidades[fila]
+            if num <= cap and mapa[fila][num] == curso_id_alvo:
+                num += 1
+                continue
             if num <= cap:
                 mapa[fila][num] = c
                 num += 1
@@ -300,38 +324,32 @@ def mover_curso(formatura_id):
     if not data:
         return jsonify({"error": "Body JSON obrigatório"}), 400
 
-    curso_id      = data.get("curso_id")
-    fila_origem   = data.get("fila_origem")
-    assento_ini_o = data.get("assento_inicio_origem")
-    assento_fim_o = data.get("assento_fim_origem")
-    fila_destino  = data.get("fila_destino")
-    assento_dest  = data.get("assento_destino")
+    curso_id     = data.get("curso_id")
+    origem       = data.get("origem")
+    fila_destino = data.get("fila_destino")
+    assento_dest = data.get("assento_destino")
 
     if not curso_id:
         return jsonify({"error": "'curso_id' é obrigatório"}), 400
-    if not fila_origem:
-        return jsonify({"error": "'fila_origem' é obrigatório"}), 400
-    if assento_ini_o is None:
-        return jsonify({"error": "'assento_inicio_origem' é obrigatório"}), 400
-    if assento_fim_o is None:
-        return jsonify({"error": "'assento_fim_origem' é obrigatório"}), 400
+    if not origem or not isinstance(origem, list):
+        return jsonify({"error": "'origem' (lista de trechos) é obrigatório"}), 400
     if not fila_destino:
         return jsonify({"error": "'fila_destino' é obrigatório"}), 400
     if assento_dest is None:
         return jsonify({"error": "'assento_destino' é obrigatório"}), 400
 
     try:
-        assento_ini_o = int(assento_ini_o)
-        assento_fim_o = int(assento_fim_o)
-        assento_dest  = int(assento_dest)
-    except (ValueError, TypeError):
-        return jsonify({"error": "Assentos devem ser inteiros"}), 400
+        assento_dest = int(assento_dest)
+        origem_segmentos = [
+            {"fila": seg["fila"], "inicio": int(seg["inicio"]), "fim": int(seg["fim"])}
+            for seg in origem
+        ]
+    except (ValueError, TypeError, KeyError):
+        return jsonify({"error": "'origem' ou 'assento_destino' em formato inválido"}), 400
 
     try:
         alocacao = _mover_e_empurrar(
-            alocacao, formatura, curso_id,
-            fila_origem, assento_ini_o, assento_fim_o,
-            fila_destino, assento_dest,
+            alocacao, formatura, curso_id, origem_segmentos, fila_destino, assento_dest,
         )
         alocacao.save()
     except ValidationError as e:
