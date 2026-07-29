@@ -74,6 +74,48 @@ def _ordenar_filas(filas_dict):
     return sorted(filas_dict.keys(), key=chave)
 
 
+LINHA_CORREDOR = 12  # mesmo valor usado em app/services/alocacao_service.py
+
+
+def _filas_por_letra_vertical(filas_dict):
+    """
+    Organiza as filas do local do mesmo jeito que app/services/alocacao_service.py:
+    {'A': {'antes': ['1A','2A',...,'12A'], 'depois': ['13A',...,'25A']}, 'B': {...}, ...}
+    "antes"/"depois" são relativos ao LINHA_CORREDOR, cada lista em ordem crescente de número.
+    Retorna (letras_em_ordem_alfabetica, por_letra).
+    """
+    por_letra = {}
+    for nome in filas_dict:
+        m = re.match(r"^(\d+)([A-Z]+)$", nome)
+        if not m:
+            continue
+        numero, letra = int(m.group(1)), m.group(2)
+        por_letra.setdefault(letra, {"antes": [], "depois": []})
+        chave = "antes" if numero <= LINHA_CORREDOR else "depois"
+        por_letra[letra][chave].append((numero, nome))
+
+    letras = sorted(por_letra.keys())
+    for letra in letras:
+        por_letra[letra]["antes"] = [nome for _, nome in sorted(por_letra[letra]["antes"])]
+        por_letra[letra]["depois"] = [nome for _, nome in sorted(por_letra[letra]["depois"])]
+    return letras, por_letra
+
+
+def _filas_ordem_vertical(filas_dict):
+    """
+    Mesma ordem de preenchimento do algoritmo automático (gerar_alocacao_vertical_corrigida):
+    coluna por coluna (letra, em ordem alfabética) e, dentro de cada coluna, as fileiras
+    "antes" do corredor seguidas das "depois", ambas em ordem crescente de número.
+    Ex: 1A,2A,...,12A,13A,...,25A, 1B,2B,...,12B,13B,...,25B, 1C,...
+    """
+    letras, por_letra = _filas_por_letra_vertical(filas_dict)
+    ordem = []
+    for letra in letras:
+        ordem.extend(por_letra[letra]["antes"])
+        ordem.extend(por_letra[letra]["depois"])
+    return ordem
+
+
 def _payload_alocacao(alocacao, local, formatura):
     return {
         "id": str(alocacao.id),
@@ -172,7 +214,15 @@ def _mover_e_empurrar(alocacao, formatura, curso_id_alvo, origem_segmentos, fila
     """
     Move um ou mais trechos de origem (normalmente o "bloco contíguo" de um curso que se
     espalhou por várias filas seguidas) para (fila_destino, assento_destino), empurrando em
-    cascata — só a partir do destino em diante — o que estiver no caminho.
+    cascata o que estiver no caminho a partir dali — seguindo a MESMA regra de
+    preenchimento do algoritmo automático (gerar_alocacao_vertical_corrigida):
+
+      - dentro de uma coluna (letra), preenche as fileiras "antes" do corredor primeiro;
+      - se um curso (o bloco movido, ou um dos empurrados) não cabe inteiro "antes",
+        o excesso continua na mesma coluna "depois" do corredor;
+      - quando isso acontece, a coluna fica marcada como usada: o PRÓXIMO curso a ser
+        posicionado pula direto pra próxima coluna, fileira 1, antes do corredor — nunca
+        continua ocupando o "depois" de uma coluna já atravessada por outro curso.
 
     origem_segmentos: lista de dicts {"fila": str, "inicio": int, "fim": int}.
 
@@ -181,7 +231,8 @@ def _mover_e_empurrar(alocacao, formatura, curso_id_alvo, origem_segmentos, fila
     """
     local = formatura.local
     capacidades = {f.nome: f.quantidade_assentos for f in local.filas_ordenadas}
-    filas_ordenadas = _ordenar_filas(capacidades)
+    filas_ordenadas = _filas_ordem_vertical(capacidades)
+    letras, por_letra = _filas_por_letra_vertical(capacidades)
 
     if not origem_segmentos:
         raise ValidationError("Nenhum trecho de origem informado.")
@@ -223,10 +274,12 @@ def _mover_e_empurrar(alocacao, formatura, curso_id_alvo, origem_segmentos, fila
 
     idx_dest = filas_ordenadas.index(fila_destino)
 
-    # Empurra só OUTROS cursos. Qualquer outra ocorrência do próprio curso_id_alvo que
-    # esteja fora de origem_segmentos (ex: um pedaço solto em outra fila) fica congelada
-    # no lugar — nunca entra na fila de empurrar nem é limpa.
+    # Agrupa em "itens" (curso_id, quantidade) os trechos contíguos que serão empurrados —
+    # preserva os blocos de cada curso em vez de tratar assento a assento. Qualquer outra
+    # ocorrência do próprio curso_id_alvo (ex: um pedaço solto em outra fila) fica
+    # congelada no lugar — nunca entra na lista de empurrar nem é limpa.
     cursos_para_empurrar = []
+    cur_curso, cur_qtd = None, 0
     for fi, fila in enumerate(filas_ordenadas):
         if fi < idx_dest:
             continue
@@ -235,7 +288,17 @@ def _mover_e_empurrar(alocacao, formatura, curso_id_alvo, origem_segmentos, fila
         for num in range(inicio, cap + 1):
             c = mapa[fila][num]
             if c != "VAZIO" and c != curso_id_alvo:
-                cursos_para_empurrar.append(c)
+                if c == cur_curso:
+                    cur_qtd += 1
+                else:
+                    if cur_curso is not None:
+                        cursos_para_empurrar.append((cur_curso, cur_qtd))
+                    cur_curso, cur_qtd = c, 1
+            elif cur_curso is not None:
+                cursos_para_empurrar.append((cur_curso, cur_qtd))
+                cur_curso, cur_qtd = None, 0
+    if cur_curso is not None:
+        cursos_para_empurrar.append((cur_curso, cur_qtd))
 
     for fi, fila in enumerate(filas_ordenadas):
         if fi < idx_dest:
@@ -246,44 +309,92 @@ def _mover_e_empurrar(alocacao, formatura, curso_id_alvo, origem_segmentos, fila
             if mapa[fila][num] != curso_id_alvo:
                 mapa[fila][num] = "VAZIO"
 
-    # Coloca o bloco movido, pulando (sem contar) qualquer célula já congelada com o
-    # próprio curso_id_alvo — ela permanece exatamente como estava. Ao terminar, fi/num
-    # ficam exatamente onde pararam (não pulam pra próxima fileira à toa), pra fase
-    # seguinte (empurrar outros cursos) aproveitar o que sobrou da fileira atual.
-    restantes = total_curso_alvo
-    fi = idx_dest
-    num = assento_destino
-    while restantes > 0:
-        if fi >= len(filas_ordenadas):
-            raise ValidationError("Não há espaço suficiente para alocar o curso no destino.")
-        fila = filas_ordenadas[fi]
-        cap = capacidades[fila]
-        if num > cap:
-            fi += 1
-            num = 1
-            continue
-        if mapa[fila][num] != curso_id_alvo:
-            mapa[fila][num] = curso_id_alvo
-            restantes -= 1
-        num += 1
+    def _espaco_livre(fila_lista, fase_idx_inicio, assento_inicio):
+        """Conta (sem alterar nada) quantos assentos livres existem a partir de
+        (fase_idx_inicio, assento_inicio) até o fim de fila_lista."""
+        total = 0
+        for i in range(fase_idx_inicio, len(fila_lista)):
+            fila = fila_lista[i]
+            cap_fila = capacidades[fila]
+            inicio = assento_inicio if i == fase_idx_inicio else 1
+            for num in range(inicio, cap_fila + 1):
+                if mapa[fila][num] != curso_id_alvo:
+                    total += 1
+        return total
 
-    for c in cursos_para_empurrar:
-        placed = False
-        while not placed:
-            if fi >= len(filas_ordenadas):
-                raise ValidationError("Não há espaço suficiente para realocar todos os cursos.")
-            fila = filas_ordenadas[fi]
-            cap = capacidades[fila]
-            if num <= cap and mapa[fila][num] == curso_id_alvo:
-                num += 1
-                continue
-            if num <= cap:
-                mapa[fila][num] = c
-                num += 1
-                placed = True
-            else:
+    def _preencher(fila_lista, fase_idx_inicio, assento_inicio, curso_id, quantidade):
+        """Preenche até `quantidade` assentos livres a partir de (fase_idx_inicio,
+        assento_inicio), andando por fila_lista (pulando células congeladas do
+        curso_id_alvo). Retorna (fase_idx_final, assento_final, restantes_nao_colocados)."""
+        fi, num, restantes = fase_idx_inicio, assento_inicio, quantidade
+        while restantes > 0 and fi < len(fila_lista):
+            fila = fila_lista[fi]
+            cap_fila = capacidades[fila]
+            if num > cap_fila:
                 fi += 1
                 num = 1
+                continue
+            if mapa[fila][num] != curso_id_alvo:
+                mapa[fila][num] = curso_id
+                restantes -= 1
+            num += 1
+        return fi, num, restantes
+
+    def _colocar(pos, curso_id, quantidade):
+        """
+        Posiciona `quantidade` assentos de `curso_id` a partir de `pos`
+        (letra_idx, fase, fase_idx, assento), respeitando a mesma regra do algoritmo
+        automático: primeiro checa se ainda há espaço em "antes" da coluna atual a
+        partir da posição (senão pula direto pra(s) próxima(s) coluna(s), sem tocar
+        "depois"); tenta encaixar tudo em "antes"; o que não couber transborda pro
+        "depois" da MESMA coluna. Retorna a posição onde o PRÓXIMO curso deve
+        começar: se este transbordou (ou já começou em "depois"), o próximo pula pra
+        próxima coluna, fileira 1, antes do corredor; senão continua de onde parou.
+        """
+        letra_idx, fase, fase_idx, assento = pos
+
+        if fase == "antes":
+            while (letra_idx < len(letras)
+                   and _espaco_livre(por_letra[letras[letra_idx]]["antes"], fase_idx, assento) == 0):
+                letra_idx += 1
+                fase_idx, assento = 0, 1
+
+            if letra_idx >= len(letras):
+                raise ValidationError("Não há espaço suficiente para realocar todos os cursos.")
+
+            letra = letras[letra_idx]
+            fase_idx, assento, restantes = _preencher(
+                por_letra[letra]["antes"], fase_idx, assento, curso_id, quantidade
+            )
+            if restantes == 0:
+                return (letra_idx, "antes", fase_idx, assento)
+
+            # excesso vai pro "depois" da MESMA coluna
+            _, _, restantes = _preencher(por_letra[letra]["depois"], 0, 1, curso_id, restantes)
+            if restantes > 0:
+                raise ValidationError("Não há espaço suficiente para realocar todos os cursos.")
+            return (letra_idx + 1, "antes", 0, 1)
+
+        # fase == "depois": destino já começa depois do corredor de alguma coluna
+        letra = letras[letra_idx]
+        _, _, restantes = _preencher(por_letra[letra]["depois"], fase_idx, assento, curso_id, quantidade)
+        if restantes > 0:
+            raise ValidationError("Não há espaço suficiente para realocar todos os cursos.")
+        return (letra_idx + 1, "antes", 0, 1)
+
+    m = re.match(r"^(\d+)([A-Z]+)$", fila_destino)
+    numero_destino, letra_destino = int(m.group(1)), m.group(2)
+    fase_destino = "antes" if numero_destino <= LINHA_CORREDOR else "depois"
+    pos = (
+        letras.index(letra_destino),
+        fase_destino,
+        por_letra[letra_destino][fase_destino].index(fila_destino),
+        assento_destino,
+    )
+
+    pos = _colocar(pos, curso_id_alvo, total_curso_alvo)
+    for curso_id, qtd in cursos_para_empurrar:
+        pos = _colocar(pos, curso_id, qtd)
 
     alocacao.alocacoes = []
     for fila in filas_ordenadas:
